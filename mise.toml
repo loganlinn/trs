@@ -1,0 +1,28 @@
+[env]
+_.path = ["bin"]
+HK_MISE = "1"
+
+[tools]
+hk = "latest"
+pkl = "latest"
+pinact = "latest"
+shellcheck = "latest"
+shfmt = "latest"
+actionlint = "latest"
+ripgrep = "latest"
+
+[tasks.build]
+run = "echo TODO"
+
+[tasks.test]
+run = "echo TODO"
+
+[tasks.lint]
+run = "hk check"
+
+[tasks.fmt]
+run = "hk check --fix"
+
+[settings]
+experimental = true
+lockfile = true

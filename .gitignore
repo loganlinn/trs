@@ -1,0 +1,19 @@
+*.local
+*.local.*
+.env
+.env.*
+!.env.example
+.local/
+/target
+
+# vim
+*~
+*.swp
+*.swo
+.*.sw?
+Session.vim
+.netrwhist
+
+# emacs
+\#*\#
+.#*

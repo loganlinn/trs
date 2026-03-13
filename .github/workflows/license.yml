@@ -1,0 +1,21 @@
+name: license
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 0 1 1 *"
+
+jobs:
+  update-year:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - id: update-year
+        run: |
+          year=$(date --date=tomorrow +%Y)
+          sed -i "s/Copyright (c) [0-9]\{4\}/Copyright (c) $year/" LICENSE
+          git diff --quiet LICENSE && exit 0
+          git commit --message="chore: update LICENSE year to $year" --no-edit --no-verify -- LICENSE
+          git push
