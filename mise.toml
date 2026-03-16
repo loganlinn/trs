@@ -10,18 +10,28 @@ shellcheck = "latest"
 shfmt = "latest"
 actionlint = "latest"
 ripgrep = "latest"
+rust = "latest"
 
 [tasks.build]
-run = "echo TODO"
+run = "cargo build"
+
+[tasks."build:release"]
+run = "cargo build --release"
 
 [tasks.test]
-run = "echo TODO"
+run = "cargo test"
 
 [tasks.lint]
-run = "hk check"
+run = "cargo clippy -- -D warnings"
 
 [tasks.fmt]
-run = "hk check --fix"
+run = "cargo fmt"
+
+[tasks.check]
+run = "cargo check"
+
+[tasks.run]
+run = "cargo run --"
 
 [settings]
 experimental = true
