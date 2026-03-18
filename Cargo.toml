@@ -2,7 +2,7 @@
 name = "trs"
 version = "0.1.0"
 edition = "2021"
-description = "Full-text search over chat session transcripts"
+description = "Local-first, full-text search over chat transcripts (trs)"
 license = "MIT"
 
 [dependencies]

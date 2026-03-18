@@ -33,8 +33,8 @@ fn test_cli_help_exits_zero() {
         .expect("failed to run trs");
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("Full-text search over Claude Code session transcripts"));
-    assert!(stdout.contains("search"));
+    assert!(stdout.contains("Full-text search over chat session transcripts"));
+    assert!(stdout.contains("query"));
     assert!(stdout.contains("index"));
     assert!(stdout.contains("ingest"));
 }
@@ -110,13 +110,13 @@ fn test_db_clean_nonexistent() {
 }
 
 #[test]
-fn test_search_no_index() {
+fn test_query_no_index() {
     let dir = tempfile::tempdir().unwrap();
     let db_path = dir.path().join("test.db");
 
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_trs"))
         .args([
-            "search",
+            "query",
             "--no-index",
             "-d",
             db_path.to_str().unwrap(),

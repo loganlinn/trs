@@ -36,7 +36,7 @@ fn run(cli: Cli) -> Result<i32> {
     let color = cli.use_color();
 
     match cli.command {
-        Some(Command::Search(args)) => {
+        Some(Command::Query(args)) => {
             let query_str = args.query.join(" ");
             if query_str.is_empty() {
                 // No query: if interactive, launch TUI; otherwise show help
@@ -93,23 +93,14 @@ fn run(cli: Cli) -> Result<i32> {
             Ok(0)
         }
         None => {
-            // Implicit search or TUI
-            let query_str = cli.query.join(" ");
-            if query_str.is_empty() {
-                if !cli.no_tui && is_terminal::is_terminal(io::stdout()) {
-                    tui::run()?;
-                    return Ok(0);
-                }
-                use clap::CommandFactory;
-                Cli::command().print_help()?;
-                return Ok(1);
+            // No subcommand: launch TUI if interactive, otherwise show help
+            if !cli.no_tui && is_terminal::is_terminal(io::stdout()) {
+                tui::run()?;
+                return Ok(0);
             }
-
-            // Auto-index then search
-            indexer::run_index(&db_path, false)?;
-            let query = db::normalize_fts_query(&query_str);
-            let found = search::run_search(&query, &db_path, None, None, None, 20, 1, 1, color)?;
-            Ok(if found { 0 } else { 2 })
+            use clap::CommandFactory;
+            Cli::command().print_help()?;
+            Ok(1)
         }
     }
 }

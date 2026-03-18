@@ -167,11 +167,13 @@ fn result_list_item<'a>(
 
     let header_style = if is_selected {
         Style::default()
-            .fg(Color::Cyan)
+            .fg(Color::Magenta)
             .bg(Color::DarkGray)
             .add_modifier(Modifier::BOLD)
     } else {
-        Style::default().fg(Color::Cyan)
+        Style::default()
+            .fg(Color::Magenta)
+            .add_modifier(Modifier::BOLD)
     };
 
     let meta_style = if is_selected {
@@ -246,86 +248,176 @@ fn draw_detail(f: &mut Frame, app: &App, area: Rect) {
         })
         .collect();
 
+    let title_line = Line::from(vec![
+        Span::styled(title, Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD)),
+    ]);
+
+    let bottom_line = if match_info.is_empty() {
+        Line::from("")
+    } else {
+        Line::from(Span::styled(match_info, Style::default().fg(Color::DarkGray))).right_aligned()
+    };
+
     let paragraph = Paragraph::new(lines)
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .title(title)
-                .title_bottom(Line::from(match_info).right_aligned()),
+                .border_style(Style::default().fg(Color::DarkGray))
+                .title(title_line)
+                .title_bottom(bottom_line),
         )
         .wrap(Wrap { trim: false });
 
     f.render_widget(paragraph, area);
 }
 
+/// Style constants matching chat's conversation rendering.
+const INDENT: &str = "   ";
+const MAX_BODY_LINES: usize = 40;
+
 fn message_to_lines<'a>(
     msg: &crate::session::Message,
     is_match: bool,
-    _terms: &[String],
+    terms: &[String],
 ) -> Vec<Line<'a>> {
-    let role_color = match msg.role {
-        MessageRole::User => Color::Green,
-        MessageRole::Assistant => Color::Blue,
-        MessageRole::Summary => Color::Yellow,
-        MessageRole::Teammate => Color::Cyan,
-    };
-
-    let role_label = match msg.role {
+    let (role_color, marker, role_label) = match msg.role {
+        MessageRole::User => (Color::Magenta, "❯", "user".to_string()),
+        MessageRole::Assistant => (Color::Blue, "●", "claude".to_string()),
+        MessageRole::Summary => (Color::Yellow, "◆", "summary".to_string()),
         MessageRole::Teammate => {
-            if msg.teammate_id.is_empty() {
+            let label = if msg.teammate_id.is_empty() {
                 "claude[teammate]".to_string()
             } else {
                 format!("claude[{}]", msg.teammate_id)
-            }
+            };
+            (Color::Cyan, "●", label)
         }
-        MessageRole::Assistant => "claude".to_string(),
-        _ => msg.role.as_str().to_string(),
     };
 
     let mut lines = Vec::new();
 
-    // Separator / header line
-    let header_style = if is_match {
-        Style::default().fg(role_color).add_modifier(Modifier::BOLD)
-    } else {
-        Style::default().fg(role_color)
-    };
+    // Role header: "● claude" or "❯ user" — bold, colored, like Claude Code
+    let num_style = Style::default().fg(Color::DarkGray);
+    let marker_style = Style::default().fg(role_color);
+    let label_style = Style::default()
+        .fg(role_color)
+        .add_modifier(Modifier::BOLD);
 
-    let match_marker = if is_match { "*" } else { " " };
+    let mut header_spans = vec![
+        Span::styled(format!("{:>3} ", msg.index + 1), num_style),
+        Span::styled(format!("{marker} "), marker_style),
+        Span::styled(role_label, label_style),
+    ];
 
-    lines.push(Line::from(vec![
-        Span::styled(
-            format!("{match_marker}{:>3} ", msg.index + 1),
-            Style::default().fg(Color::DarkGray),
-        ),
-        Span::styled(role_label, header_style),
-    ]));
+    // Match indicator — subtle tag after the role label
+    if is_match {
+        header_spans.push(Span::styled(
+            " ◀",
+            Style::default()
+                .fg(Color::Red)
+                .add_modifier(Modifier::BOLD),
+        ));
+    }
 
-    // Message text lines
-    let text_style = if is_match {
-        Style::default().fg(Color::White)
-    } else {
-        Style::default().fg(Color::Gray)
-    };
+    lines.push(Line::from(header_spans));
 
-    for text_line in msg.text.lines().take(30) {
+    // Message body — indented, with term highlighting for matches
+    let text = msg.text.trim();
+    let text_lines: Vec<&str> = text.lines().collect();
+    let show_count = text_lines.len().min(MAX_BODY_LINES);
+
+    for text_line in &text_lines[..show_count] {
+        let styled_line = if text_line.starts_with("$ ") {
+            // Shell command — dim green, like a terminal prompt
+            Line::from(vec![
+                Span::raw(INDENT),
+                Span::styled(
+                    text_line.to_string(),
+                    Style::default().fg(Color::Green).add_modifier(Modifier::DIM),
+                ),
+            ])
+        } else if text_line.starts_with('[') && text_line.ends_with(']') {
+            // Tool use like [Read /path/to/file] — dim cyan
+            Line::from(vec![
+                Span::raw(INDENT),
+                Span::styled(
+                    text_line.to_string(),
+                    Style::default().fg(Color::Cyan).add_modifier(Modifier::DIM),
+                ),
+            ])
+        } else if is_match && !terms.is_empty() {
+            // Highlight matching terms in body text
+            highlight_line(text_line, terms)
+        } else {
+            let body_color = if is_match {
+                Color::White
+            } else {
+                Color::Gray
+            };
+            Line::from(vec![
+                Span::raw(INDENT),
+                Span::styled(text_line.to_string(), Style::default().fg(body_color)),
+            ])
+        };
+        lines.push(styled_line);
+    }
+
+    if text_lines.len() > MAX_BODY_LINES {
         lines.push(Line::from(Span::styled(
-            format!("      {text_line}"),
-            text_style,
+            format!(
+                "{INDENT}… +{} more lines",
+                text_lines.len() - MAX_BODY_LINES
+            ),
+            Style::default().fg(Color::DarkGray),
         )));
     }
 
-    if msg.text.lines().count() > 30 {
-        lines.push(Line::from(Span::styled(
-            format!("      ... (+{} lines)", msg.text.lines().count() - 30),
-            Style::default().fg(Color::DarkGray),
-        )));
-    }
-
-    // Blank line between messages
+    // Blank line separator between messages
     lines.push(Line::from(""));
 
     lines
+}
+
+/// Highlight search terms in a single line of text.
+fn highlight_line<'a>(text: &str, terms: &[String]) -> Line<'a> {
+    let escaped: Vec<String> = terms.iter().map(|t| regex::escape(t)).collect();
+    let pattern = match regex::RegexBuilder::new(&escaped.join("|"))
+        .case_insensitive(true)
+        .build()
+    {
+        Ok(re) => re,
+        Err(_) => {
+            return Line::from(vec![
+                Span::raw(INDENT.to_string()),
+                Span::styled(text.to_string(), Style::default().fg(Color::White)),
+            ]);
+        }
+    };
+
+    let mut spans = vec![Span::raw(INDENT.to_string())];
+    let mut last = 0;
+    for m in pattern.find_iter(text) {
+        if m.start() > last {
+            spans.push(Span::styled(
+                text[last..m.start()].to_string(),
+                Style::default().fg(Color::White),
+            ));
+        }
+        spans.push(Span::styled(
+            m.as_str().to_string(),
+            Style::default()
+                .fg(Color::Red)
+                .add_modifier(Modifier::BOLD),
+        ));
+        last = m.end();
+    }
+    if last < text.len() {
+        spans.push(Span::styled(
+            text[last..].to_string(),
+            Style::default().fg(Color::White),
+        ));
+    }
+    Line::from(spans)
 }
 
 fn draw_status_bar(f: &mut Frame, app: &App, area: Rect) {

@@ -7,15 +7,14 @@ use crate::config;
 #[command(
     name = "trs",
     version,
-    about = "Full-text search over Claude Code session transcripts",
-    long_about = "Full-text search over Claude Code session transcripts.\n\n\
-        When called with a query, searches indexed sessions (shorthand for `trs search`).\n\
-        When called with no arguments in an interactive terminal, opens the TUI.",
-    after_help = "Any unrecognized arguments are treated as a search query.\n\
-        Use `trs search --help` for search-specific options.\n\n\
-        Examples:\n  \
-        trs \"LaunchDarkly migration\"       Search for a phrase\n  \
+    about = "Full-text search over chat transcripts",
+    long_about = "Full-text search over chat transcripts.\n\n\
+        When called with no arguments in an interactive terminal, opens the TUI.\n\
+        Use `trs query` (or `trs q`) to search from the command line.",
+    after_help = "Examples:\n  \
         trs                                Open interactive TUI\n  \
+        trs q \"LaunchDarkly migration\"     Search for a phrase\n  \
+        trs q kitty -p dotfiles            Search with project filter\n  \
         trs index                          Build/update the index\n  \
         trs index --full                   Full reindex from scratch\n  \
         trs db clean                       Delete the index database"
@@ -40,10 +39,6 @@ pub struct Cli {
 
     #[command(subcommand)]
     pub command: Option<Command>,
-
-    /// Implicit search query (when no subcommand given)
-    #[arg(trailing_var_arg = true)]
-    pub query: Vec<String>,
 }
 
 impl Cli {
@@ -75,15 +70,18 @@ pub enum ColorChoice {
 
 #[derive(Subcommand, Debug)]
 pub enum Command {
-    /// Search indexed sessions (default command)
-    #[command(after_help = "Examples:\n  \
-            trs search \"LaunchDarkly migration\"\n  \
-            trs search DynamoDB -b saved-media\n  \
-            trs search kitty -p dotfiles\n  \
-            trs search \"terraform\" -f \"*.tf\" -n 5\n  \
-            trs search \"bug fix\" -C 3\n  \
-            trs search --no-index \"quick query\"")]
-    Search(SearchArgs),
+    /// Search indexed sessions
+    #[command(
+        alias = "q",
+        after_help = "Examples:\n  \
+            trs query \"LaunchDarkly migration\"\n  \
+            trs q DynamoDB -b saved-media\n  \
+            trs q kitty -p dotfiles\n  \
+            trs q \"terraform\" -f \"*.tf\" -n 5\n  \
+            trs q \"bug fix\" -C 3\n  \
+            trs q --no-index \"quick query\""
+    )]
+    Query(SearchArgs),
 
     /// Build or update the search index
     #[command(after_help = "Examples:\n  \
@@ -231,21 +229,31 @@ mod tests {
     }
 
     #[test]
-    fn test_search_args() {
-        let cli = Cli::parse_from(["trs", "search", "hello", "world"]);
+    fn test_query_args() {
+        let cli = Cli::parse_from(["trs", "query", "hello", "world"]);
         match cli.command {
-            Some(Command::Search(args)) => {
+            Some(Command::Query(args)) => {
                 assert_eq!(args.query, vec!["hello", "world"]);
             }
-            _ => panic!("expected Search command"),
+            _ => panic!("expected Query command"),
         }
     }
 
     #[test]
-    fn test_implicit_query() {
-        let cli = Cli::parse_from(["trs", "hello", "world"]);
+    fn test_query_alias() {
+        let cli = Cli::parse_from(["trs", "q", "hello", "world"]);
+        match cli.command {
+            Some(Command::Query(args)) => {
+                assert_eq!(args.query, vec!["hello", "world"]);
+            }
+            _ => panic!("expected Query command via alias"),
+        }
+    }
+
+    #[test]
+    fn test_no_args_is_none() {
+        let cli = Cli::parse_from(["trs"]);
         assert!(cli.command.is_none());
-        assert_eq!(cli.query, vec!["hello", "world"]);
     }
 
     #[test]
