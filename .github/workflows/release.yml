@@ -47,7 +47,7 @@ jobs:
           cp LICENSE README.md "dist/${name}/"
           tar -czf "dist/${name}.tar.gz" -C dist "${name}"
 
-      - uses: actions/upload-artifact@ea165f8d65b6db9b8a1f7571828bae0b3bda9b82 # v4.6.2
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: trs-${{ matrix.target }}
           path: dist/*.tar.gz
