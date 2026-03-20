@@ -311,35 +311,35 @@ fi
 The TUI opens when `trs` is invoked with no arguments in an interactive
 terminal. It provides real-time search with a fuzzy-matching input.
 
-| Key              | Action                              |
-|------------------|-------------------------------------|
-| `Enter`          | Resume session (`claude --resume`)  |
-| `Shift-Enter`    | Fork session (`--fork-session`)     |
-| `Tab`            | Open selected session detail        |
-| `Esc` / `q`      | Quit / go back                     |
-| `Up` / `Ctrl-P`  | Previous result                    |
-| `Down` / `Ctrl-N`| Next result                        |
-| `Ctrl-U`         | Clear search input                 |
-| `Ctrl-D`         | Scroll down half page              |
-| `Ctrl-B`         | Scroll up half page                |
-| `/`              | Focus search input (from detail)   |
-| `y`              | Show session ID                    |
-| `r`              | Show resume command                |
-| `?`              | Show help overlay                  |
+| Key | Action |
+|---|---|
+| <kbd>Enter</kbd> | Resume session (`claude --resume`) |
+| <kbd>Shift</kbd>+<kbd>Enter</kbd> | Fork session (`--fork-session`) |
+| <kbd>Tab</kbd> | Open selected session detail |
+| <kbd>Esc</kbd> / <kbd>q</kbd> | Quit / go back |
+| <kbd>↑</kbd> / <kbd>Ctrl</kbd>+<kbd>P</kbd> | Previous result |
+| <kbd>↓</kbd> / <kbd>Ctrl</kbd>+<kbd>N</kbd> | Next result |
+| <kbd>Ctrl</kbd>+<kbd>U</kbd> | Clear search input |
+| <kbd>Ctrl</kbd>+<kbd>D</kbd> | Scroll down half page |
+| <kbd>Ctrl</kbd>+<kbd>B</kbd> | Scroll up half page |
+| <kbd>/</kbd> | Focus search input (from detail) |
+| <kbd>y</kbd> | Show session ID |
+| <kbd>r</kbd> | Show resume command |
+| <kbd>?</kbd> | Show help overlay |
 
 ### Session Detail View
 
-| Key              | Action                              |
-|------------------|-------------------------------------|
-| `Esc` / `q`      | Back to results list               |
-| `j` / `Down`     | Scroll down                        |
-| `k` / `Up`       | Scroll up                          |
-| `g`              | Jump to top                        |
-| `G`              | Jump to bottom                     |
-| `n`              | Next match                         |
-| `N`              | Previous match                     |
-| `y`              | Copy session ID                    |
-| `r`              | Copy resume command                |
+| Key | Action |
+|---|---|
+| <kbd>Esc</kbd> / <kbd>q</kbd> | Back to results list |
+| <kbd>j</kbd> / <kbd>↓</kbd> | Scroll down |
+| <kbd>k</kbd> / <kbd>↑</kbd> | Scroll up |
+| <kbd>g</kbd> | Jump to top |
+| <kbd>G</kbd> | Jump to bottom |
+| <kbd>n</kbd> | Next match |
+| <kbd>N</kbd> | Previous match |
+| <kbd>y</kbd> | Show session ID |
+| <kbd>r</kbd> | Show resume command |
 
 ---
 
