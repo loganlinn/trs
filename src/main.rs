@@ -9,6 +9,7 @@ mod session;
 mod tui;
 
 use std::io::{self, BufRead, Write};
+use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::process;
 
@@ -41,7 +42,9 @@ fn run(cli: Cli) -> Result<i32> {
             if query_str.is_empty() {
                 // No query: if interactive, launch TUI; otherwise show help
                 if !cli.no_tui && is_terminal::is_terminal(io::stdout()) {
-                    tui::run()?;
+                    if let Some(action) = tui::run()? {
+                        exec_exit_action(action);
+                    }
                     return Ok(0);
                 }
                 use clap::CommandFactory;
@@ -95,7 +98,9 @@ fn run(cli: Cli) -> Result<i32> {
         None => {
             // No subcommand: launch TUI if interactive, otherwise show help
             if !cli.no_tui && is_terminal::is_terminal(io::stdout()) {
-                tui::run()?;
+                if let Some(action) = tui::run()? {
+                    exec_exit_action(action);
+                }
                 return Ok(0);
             }
             use clap::CommandFactory;
@@ -103,6 +108,22 @@ fn run(cli: Cli) -> Result<i32> {
             Ok(1)
         }
     }
+}
+
+/// Replace the current process with `claude --resume <id>` (or --fork-session).
+fn exec_exit_action(action: tui::ExitAction) -> ! {
+    let (session_id, fork) = match action {
+        tui::ExitAction::Resume(id) => (id, false),
+        tui::ExitAction::Fork(id) => (id, true),
+    };
+    let mut cmd = process::Command::new("claude");
+    cmd.arg("--resume").arg(&session_id);
+    if fork {
+        cmd.arg("--fork-session");
+    }
+    let err = cmd.exec();
+    eprintln!("Failed to exec claude: {err}");
+    process::exit(1);
 }
 
 // --- Ingest ---

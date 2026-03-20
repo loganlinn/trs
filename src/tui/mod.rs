@@ -18,6 +18,8 @@ use crate::config;
 use crate::db;
 use app::App;
 
+pub use app::ExitAction;
+
 fn init_terminal() -> Result<Terminal<CrosstermBackend<io::Stdout>>> {
     enable_raw_mode()?;
     execute!(stdout(), EnterAlternateScreen)?;
@@ -40,7 +42,7 @@ fn restore_terminal(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Re
 }
 
 /// Run the interactive TUI search interface.
-pub fn run() -> Result<()> {
+pub fn run() -> Result<Option<ExitAction>> {
     let db_path = config::default_db_path();
 
     // Auto-index before launching TUI
@@ -56,7 +58,8 @@ pub fn run() -> Result<()> {
     let result = run_loop(&mut terminal, &mut app);
 
     restore_terminal(&mut terminal)?;
-    result
+    result?;
+    Ok(app.exit_action.clone())
 }
 
 fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, app: &mut App) -> Result<()> {
@@ -115,9 +118,9 @@ mod tests {
     }
 
     #[test]
-    fn test_enter_produces_open_detail_message() {
+    fn test_enter_produces_resume_message() {
         let mut app = test_app();
-        // Insert a fake result so Enter has something to open
+        // Insert a fake result so Enter has something to act on
         app.results.push(crate::session::SearchResult {
             session_id: "test-1".into(),
             source: "claude-code".into(),
@@ -137,9 +140,7 @@ mod tests {
         });
 
         let msg = app.handle_key(key(KeyCode::Enter));
-        assert!(matches!(msg, Some(Message::OpenDetail)));
-        // Note: actual mode transition requires a real JSONL file on disk,
-        // so we only verify the message is produced.
+        assert!(matches!(msg, Some(Message::ResumeSession)));
     }
 
     #[test]

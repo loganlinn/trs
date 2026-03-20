@@ -313,17 +313,18 @@ terminal. It provides real-time search with a fuzzy-matching input.
 
 | Key              | Action                              |
 |------------------|-------------------------------------|
-| `Enter`          | Open selected session detail        |
+| `Enter`          | Resume session (`claude --resume`)  |
+| `Shift-Enter`    | Fork session (`--fork-session`)     |
+| `Tab`            | Open selected session detail        |
 | `Esc` / `q`      | Quit / go back                     |
 | `Up` / `Ctrl-P`  | Previous result                    |
 | `Down` / `Ctrl-N`| Next result                        |
 | `Ctrl-U`         | Clear search input                 |
 | `Ctrl-D`         | Scroll down half page              |
 | `Ctrl-B`         | Scroll up half page                |
-| `Tab`            | Toggle filter panel                |
 | `/`              | Focus search input (from detail)   |
-| `y`              | Copy session ID to clipboard       |
-| `r`              | Copy `claude --resume <id>`        |
+| `y`              | Show session ID                    |
+| `r`              | Show resume command                |
 | `?`              | Show help overlay                  |
 
 ### Session Detail View

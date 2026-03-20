@@ -41,6 +41,15 @@ pub enum Message {
     DetailBottom,
     NextMatch,
     PrevMatch,
+    ResumeSession,
+    ForkSession,
+}
+
+/// Action to perform after exiting the TUI.
+#[derive(Debug, Clone)]
+pub enum ExitAction {
+    Resume(String),
+    Fork(String),
 }
 
 pub struct App {
@@ -50,6 +59,7 @@ pub struct App {
     pub selected: usize,
     pub scroll_offset: usize,
     pub should_quit: bool,
+    pub exit_action: Option<ExitAction>,
     pub status_message: String,
 
     // Detail view state
@@ -75,6 +85,7 @@ impl App {
             selected: 0,
             scroll_offset: 0,
             should_quit: false,
+            exit_action: None,
             status_message: String::new(),
             detail_messages: Vec::new(),
             detail_scroll: 0,
@@ -100,6 +111,7 @@ impl App {
 
     fn handle_normal_key(&mut self, key: KeyEvent) -> Option<Message> {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        let shift = key.modifiers.contains(KeyModifiers::SHIFT);
 
         match (key.code, ctrl) {
             (KeyCode::Esc, _) => {
@@ -127,6 +139,17 @@ impl App {
             (KeyCode::Up, _) => Some(Message::SelectPrev),
             (KeyCode::Down, _) => Some(Message::SelectNext),
             (KeyCode::Enter, _) => {
+                if !self.results.is_empty() {
+                    if shift {
+                        Some(Message::ForkSession)
+                    } else {
+                        Some(Message::ResumeSession)
+                    }
+                } else {
+                    None
+                }
+            }
+            (KeyCode::Tab, _) => {
                 if !self.results.is_empty() {
                     Some(Message::OpenDetail)
                 } else {
@@ -289,6 +312,18 @@ impl App {
                         self.detail_current_match -= 1;
                     }
                     self.scroll_to_current_match();
+                }
+            }
+            Message::ResumeSession => {
+                if let Some(result) = self.results.get(self.selected) {
+                    self.exit_action = Some(ExitAction::Resume(result.session_id.clone()));
+                    self.should_quit = true;
+                }
+            }
+            Message::ForkSession => {
+                if let Some(result) = self.results.get(self.selected) {
+                    self.exit_action = Some(ExitAction::Fork(result.session_id.clone()));
+                    self.should_quit = true;
                 }
             }
         }

@@ -33,7 +33,7 @@ fn test_cli_help_exits_zero() {
         .expect("failed to run trs");
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("Full-text search over chat session transcripts"));
+    assert!(stdout.contains("Full-text search over chat transcripts"));
     assert!(stdout.contains("query"));
     assert!(stdout.contains("index"));
     assert!(stdout.contains("ingest"));

@@ -441,7 +441,7 @@ fn draw_status_bar(f: &mut Frame, app: &App, area: Rect) {
     };
 
     let right = match app.mode {
-        Mode::Normal => "Enter:open  ?:help  Esc:quit",
+        Mode::Normal => "Enter:resume  S-Enter:fork  Tab:detail  ?:help  Esc:quit",
         Mode::Detail => "Esc:back  n/N:matches  j/k:scroll  ?:help",
         Mode::Help => "Esc:close",
     };
@@ -494,7 +494,9 @@ fn draw_help_overlay(f: &mut Frame, area: Rect) {
                 .fg(Color::Yellow)
                 .add_modifier(Modifier::BOLD),
         )),
-        Line::from("  Enter         Open session detail"),
+        Line::from("  Enter         Resume session (claude --resume)"),
+        Line::from("  Shift-Enter   Fork session (--fork-session)"),
+        Line::from("  Tab           Open session detail"),
         Line::from("  Esc           Quit (or clear input)"),
         Line::from("  Up/Ctrl-P     Previous result"),
         Line::from("  Down/Ctrl-N   Next result"),
