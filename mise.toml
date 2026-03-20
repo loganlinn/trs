@@ -33,7 +33,7 @@ run = "cargo check"
 [tasks.run]
 run = "cargo run --"
 
-[tasks.bump]
+[tasks."release:bump"]
 description = "Bump version (prints new version)"
 usage = '''
 arg "<part>" help="Version part to bump" {
@@ -57,12 +57,10 @@ esac
 echo "${major}.${minor}.${patch}"
 '''
 
-[tasks.release]
+[tasks."release:tag"]
 description = "Tag and push a release (triggers CI)"
 usage = '''
-arg "<part>" help="Version part to bump" {
-  choices "major" "minor" "patch"
-}
+arg "<version>" help="Version to release (e.g. 1.2.3)"
 flag "--dry-run" help="Show what would happen without doing it"
 '''
 run = '''
@@ -70,15 +68,14 @@ run = '''
 set -euo pipefail
 
 dry_run="${usage_dry_run:-false}"
+version="${usage_version?}"
+tag="v${version}"
 
 # Ensure clean working tree
 if [[ -n "$(git status --porcelain)" ]]; then
   echo >&2 "error: working tree is dirty"
   exit 1
 fi
-
-version="$(mise run bump "${usage_part?}")"
-tag="v${version}"
 
 # Ensure tag doesn't already exist
 if git rev-parse "$tag" &>/dev/null; then
@@ -108,6 +105,34 @@ fi
 git tag -a "$tag" -m "$tag"
 git push origin HEAD "$tag"
 echo "Released $tag"
+'''
+
+[tasks.release]
+description = "Bump version, tag, and push a release"
+usage = '''
+arg "[part]" help="Version part to bump" {
+  choices "major" "minor" "patch"
+}
+flag "--dry-run" help="Show what would happen without doing it"
+flag "--no-bump" help="Skip version bump (use current Cargo.toml version)"
+'''
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+
+dry_run_flag=""
+[[ "${usage_dry_run:-false}" == "true" ]] && dry_run_flag="--dry-run"
+
+if [[ "${usage_no_bump:-false}" == "true" ]]; then
+  version=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
+elif [[ -n "${usage_part:-}" ]]; then
+  version="$(mise run release:bump "$usage_part")"
+else
+  echo >&2 "error: <part> is required unless --no-bump is set"
+  exit 1
+fi
+
+mise run release:tag "$version" $dry_run_flag
 '''
 
 [settings]
