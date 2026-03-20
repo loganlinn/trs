@@ -240,6 +240,37 @@ pub fn search(
     Ok(rows)
 }
 
+/// List recent sessions ordered by start_time descending.
+pub fn list_recent(conn: &Connection, limit: i64) -> Result<Vec<SearchResult>> {
+    let mut stmt = conn.prepare(
+        "SELECT * FROM sessions ORDER BY start_time DESC LIMIT ?1",
+    )?;
+    let rows = stmt
+        .query_map([limit], |row| {
+            Ok(SearchResult {
+                session_id: row.get("session_id")?,
+                source: row.get::<_, String>("source").unwrap_or_default(),
+                cwd: row.get::<_, String>("cwd").unwrap_or_default(),
+                slug: row.get::<_, String>("slug").unwrap_or_default(),
+                git_branches: row.get::<_, String>("git_branches").unwrap_or_default(),
+                start_time: row.get::<_, String>("start_time").unwrap_or_default(),
+                end_time: row.get::<_, String>("end_time").unwrap_or_default(),
+                files_touched: row.get::<_, String>("files_touched").unwrap_or_default(),
+                tools_used: row.get::<_, String>("tools_used").unwrap_or_default(),
+                message_count: row.get::<_, i64>("message_count").unwrap_or_default(),
+                first_message: row.get::<_, String>("first_message").unwrap_or_default(),
+                summary: row.get::<_, String>("summary").unwrap_or_default(),
+                content_hash: row
+                    .get::<_, Option<String>>("content_hash")
+                    .unwrap_or_default(),
+                metadata: row.get::<_, Option<String>>("metadata").unwrap_or_default(),
+                rank: 0.0,
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
 /// Get stored session_id -> source_mtime for incremental indexing.
 pub fn get_stored_mtimes(conn: &Connection) -> Result<std::collections::HashMap<String, f64>> {
     let mut stmt = conn.prepare("SELECT session_id, source_mtime FROM sessions")?;

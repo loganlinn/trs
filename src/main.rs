@@ -112,10 +112,20 @@ fn run(cli: Cli) -> Result<i32> {
 
 /// Replace the current process with `claude --resume <id>` (or --fork-session).
 fn exec_exit_action(action: tui::ExitAction) -> ! {
-    let (session_id, fork) = match action {
-        tui::ExitAction::Resume(id) => (id, false),
-        tui::ExitAction::Fork(id) => (id, true),
+    let (session_id, cwd, fork) = match action {
+        tui::ExitAction::Resume { session_id, cwd } => (session_id, cwd, false),
+        tui::ExitAction::Fork { session_id, cwd } => (session_id, cwd, true),
     };
+    if !cwd.is_empty() {
+        let dir = Path::new(&cwd);
+        if dir.is_dir() {
+            if let Err(e) = std::env::set_current_dir(dir) {
+                eprintln!("Warning: failed to chdir to {cwd}: {e}");
+            }
+        } else {
+            eprintln!("Warning: session cwd not found: {cwd}");
+        }
+    }
     let mut cmd = process::Command::new("claude");
     cmd.arg("--resume").arg(&session_id);
     if fork {

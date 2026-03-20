@@ -48,8 +48,8 @@ pub enum Message {
 /// Action to perform after exiting the TUI.
 #[derive(Debug, Clone)]
 pub enum ExitAction {
-    Resume(String),
-    Fork(String),
+    Resume { session_id: String, cwd: String },
+    Fork { session_id: String, cwd: String },
 }
 
 pub struct App {
@@ -78,15 +78,17 @@ pub struct App {
 
 impl App {
     pub fn new(conn: Connection) -> Self {
+        let results = db::list_recent(&conn, 50).unwrap_or_default();
+        let status_message = format!("{} session(s)", results.len());
         Self {
             mode: Mode::Normal,
             input: Input::default(),
-            results: Vec::new(),
+            results,
             selected: 0,
             scroll_offset: 0,
             should_quit: false,
             exit_action: None,
-            status_message: String::new(),
+            status_message,
             detail_messages: Vec::new(),
             detail_scroll: 0,
             detail_match_indices: Vec::new(),
@@ -217,12 +219,7 @@ impl App {
             }
             Message::ClearInput => {
                 self.input = Input::default();
-                self.results.clear();
-                self.selected = 0;
-                self.scroll_offset = 0;
-                self.last_query.clear();
-                self.search_terms.clear();
-                self.status_message.clear();
+                self.load_recent();
             }
             Message::SelectNext => {
                 if !self.results.is_empty() {
@@ -316,28 +313,38 @@ impl App {
             }
             Message::ResumeSession => {
                 if let Some(result) = self.results.get(self.selected) {
-                    self.exit_action = Some(ExitAction::Resume(result.session_id.clone()));
+                    self.exit_action = Some(ExitAction::Resume {
+                        session_id: result.session_id.clone(),
+                        cwd: result.cwd.clone(),
+                    });
                     self.should_quit = true;
                 }
             }
             Message::ForkSession => {
                 if let Some(result) = self.results.get(self.selected) {
-                    self.exit_action = Some(ExitAction::Fork(result.session_id.clone()));
+                    self.exit_action = Some(ExitAction::Fork {
+                        session_id: result.session_id.clone(),
+                        cwd: result.cwd.clone(),
+                    });
                     self.should_quit = true;
                 }
             }
         }
     }
 
+    fn load_recent(&mut self) {
+        self.results = db::list_recent(&self.conn, 50).unwrap_or_default();
+        self.status_message = format!("{} session(s)", self.results.len());
+        self.selected = 0;
+        self.scroll_offset = 0;
+        self.last_query.clear();
+        self.search_terms.clear();
+    }
+
     fn perform_search(&mut self) {
         let query_str = self.input.value().to_string();
         if query_str.is_empty() {
-            self.results.clear();
-            self.selected = 0;
-            self.scroll_offset = 0;
-            self.last_query.clear();
-            self.search_terms.clear();
-            self.status_message.clear();
+            self.load_recent();
             return;
         }
 
