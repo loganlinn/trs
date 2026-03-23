@@ -12,9 +12,6 @@ pub enum TrsError {
     #[error("JSON error: {0}")]
     Json(#[from] serde_json::Error),
 
-    #[error("TOML parse error: {0}")]
-    Toml(#[from] toml::de::Error),
-
     #[error("index not found — run `trs index` first")]
     IndexNotFound,
 
@@ -24,12 +21,6 @@ pub enum TrsError {
     #[error("query error: {0}")]
     QueryError(String),
 
-    #[error("profile {0:?} not found in {1}")]
-    ProfileNotFound(String, String),
-
     #[error("validation error on line {line}: {message}")]
     Validation { line: usize, message: String },
-
-    #[error("{0}")]
-    Config(String),
 }

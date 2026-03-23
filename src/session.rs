@@ -1,5 +1,71 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::path::PathBuf;
+
+/// Supported source applications.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum App {
+    ClaudeCode,
+    Codex,
+}
+
+impl App {
+    /// All known apps.
+    pub const ALL: &[App] = &[App::ClaudeCode, App::Codex];
+
+    /// Canonical source string stored in the database.
+    pub fn source_str(&self) -> &'static str {
+        match self {
+            App::ClaudeCode => "claude-code",
+            App::Codex => "codex",
+        }
+    }
+
+    /// Parse from a source string or CLI alias.
+    pub fn parse(s: &str) -> Option<App> {
+        match s {
+            "claude-code" | "claude" | "cc" => Some(App::ClaudeCode),
+            "codex" | "cx" => Some(App::Codex),
+            _ => None,
+        }
+    }
+
+    /// Root directory where this app stores sessions.
+    pub fn sessions_dirs(&self) -> Vec<PathBuf> {
+        let home = directories::BaseDirs::new()
+            .map(|d| d.home_dir().to_path_buf())
+            .unwrap_or_else(|| PathBuf::from("~"));
+        match self {
+            App::ClaudeCode => vec![home.join(".claude").join("projects")],
+            App::Codex => vec![
+                home.join(".codex").join("sessions"),
+                home.join(".codex").join("archived_sessions"),
+            ],
+        }
+    }
+
+    /// Build the resume command for a session from this app.
+    pub fn resume_cmd(&self, session_id: &str) -> String {
+        match self {
+            App::ClaudeCode => format!("claude --resume {session_id}"),
+            App::Codex => format!("codex --resume {session_id}"),
+        }
+    }
+
+    /// The CLI binary name.
+    pub fn bin_name(&self) -> &'static str {
+        match self {
+            App::ClaudeCode => "claude",
+            App::Codex => "codex",
+        }
+    }
+}
+
+impl std::fmt::Display for App {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.source_str())
+    }
+}
 
 /// Core session model stored in the database.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -272,5 +338,40 @@ mod tests {
     fn test_message_role_display() {
         assert_eq!(MessageRole::User.as_str(), "user");
         assert_eq!(MessageRole::Assistant.to_string(), "assistant");
+    }
+
+    #[test]
+    fn test_app_parse() {
+        assert_eq!(App::parse("claude-code"), Some(App::ClaudeCode));
+        assert_eq!(App::parse("claude"), Some(App::ClaudeCode));
+        assert_eq!(App::parse("cc"), Some(App::ClaudeCode));
+        assert_eq!(App::parse("codex"), Some(App::Codex));
+        assert_eq!(App::parse("cx"), Some(App::Codex));
+        assert_eq!(App::parse("unknown"), None);
+    }
+
+    #[test]
+    fn test_app_source_str() {
+        assert_eq!(App::ClaudeCode.source_str(), "claude-code");
+        assert_eq!(App::Codex.source_str(), "codex");
+    }
+
+    #[test]
+    fn test_app_resume_cmd() {
+        assert_eq!(
+            App::ClaudeCode.resume_cmd("abc-123"),
+            "claude --resume abc-123"
+        );
+        assert_eq!(
+            App::Codex.resume_cmd("abc-123"),
+            "codex --resume abc-123"
+        );
+    }
+
+    #[test]
+    fn test_app_roundtrip() {
+        for app in App::ALL {
+            assert_eq!(App::parse(app.source_str()), Some(*app));
+        }
     }
 }

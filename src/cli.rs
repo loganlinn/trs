@@ -2,6 +2,7 @@ use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
 use crate::config;
+use crate::session::App;
 
 #[derive(Parser, Debug)]
 #[command(
@@ -92,7 +93,6 @@ pub enum Command {
     /// Import sessions from NDJSON on stdin
     #[command(after_help = "Examples:\n  \
             cat sessions.ndjson | trs ingest\n  \
-            my-export-tool | trs ingest --profile codex\n  \
             trs ingest -s slack < export.ndjson")]
     Ingest(IngestArgs),
 
@@ -104,9 +104,6 @@ pub enum Command {
 
     /// Show the ingest record schema
     Schema(SchemaArgs),
-
-    /// List configured ingest profiles
-    Profiles(ProfilesArgs),
 }
 
 #[derive(Parser, Debug)]
@@ -146,6 +143,10 @@ pub struct SearchArgs {
     /// Skip auto-indexing, use existing index as-is
     #[arg(long = "no-index")]
     pub no_index: bool,
+
+    /// Filter by source app: claude (cc), codex (cx). Default: all.
+    #[arg(short = 'a', long = "app")]
+    pub app: Option<String>,
 }
 
 impl SearchArgs {
@@ -156,6 +157,10 @@ impl SearchArgs {
             (self.context_before, self.context_after)
         }
     }
+
+    pub fn app_filter(&self) -> Option<App> {
+        self.app.as_deref().and_then(App::parse)
+    }
 }
 
 #[derive(Parser, Debug)]
@@ -163,18 +168,20 @@ pub struct IndexArgs {
     /// Full reindex: re-parse all sessions from scratch
     #[arg(long = "full")]
     pub full: bool,
+
+    /// Only index a specific app: claude (cc), codex (cx). Default: all.
+    #[arg(short = 'a', long = "app")]
+    pub app: Option<String>,
+}
+
+impl IndexArgs {
+    pub fn app_filter(&self) -> Option<App> {
+        self.app.as_deref().and_then(App::parse)
+    }
 }
 
 #[derive(Parser, Debug)]
 pub struct IngestArgs {
-    /// Apply a profile from profiles.toml
-    #[arg(short = 'P', long = "profile")]
-    pub profile: Option<String>,
-
-    /// Path to profiles TOML config
-    #[arg(long = "config")]
-    pub config_path: Option<PathBuf>,
-
     /// Only accept records matching this source value
     #[arg(short = 's', long = "source")]
     pub source: Option<String>,
@@ -208,13 +215,6 @@ pub struct SchemaArgs {
     /// Emit raw JSON Schema instead of human-readable output
     #[arg(long = "json")]
     pub as_json: bool,
-}
-
-#[derive(Parser, Debug)]
-pub struct ProfilesArgs {
-    /// Path to profiles TOML config
-    #[arg(long = "config")]
-    pub config_path: Option<PathBuf>,
 }
 
 #[cfg(test)]
@@ -288,7 +288,30 @@ mod tests {
             context_before: 1,
             context_both: Some(3),
             no_index: false,
+            app: None,
         };
         assert_eq!(args.effective_context(), (3, 3));
+    }
+
+    #[test]
+    fn test_app_filter() {
+        let cli = Cli::parse_from(["trs", "q", "--app", "codex", "hello"]);
+        match cli.command {
+            Some(Command::Query(args)) => {
+                assert_eq!(args.app_filter(), Some(App::Codex));
+            }
+            _ => panic!("expected Query command"),
+        }
+    }
+
+    #[test]
+    fn test_index_app_filter() {
+        let cli = Cli::parse_from(["trs", "index", "--app", "claude"]);
+        match cli.command {
+            Some(Command::Index(args)) => {
+                assert_eq!(args.app_filter(), Some(App::ClaudeCode));
+            }
+            _ => panic!("expected Index command"),
+        }
     }
 }

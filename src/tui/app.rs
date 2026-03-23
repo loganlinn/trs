@@ -8,7 +8,7 @@ use tui_input::Input;
 use crate::db;
 use crate::indexer;
 use crate::search;
-use crate::session::{Message as SessionMessage, SearchResult};
+use crate::session::{App as SourceApp, Message as SessionMessage, SearchResult};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Mode {
@@ -48,8 +48,16 @@ pub enum Message {
 /// Action to perform after exiting the TUI.
 #[derive(Debug, Clone)]
 pub enum ExitAction {
-    Resume { session_id: String, cwd: String },
-    Fork { session_id: String, cwd: String },
+    Resume {
+        session_id: String,
+        cwd: String,
+        source: String,
+    },
+    Fork {
+        session_id: String,
+        cwd: String,
+        source: String,
+    },
 }
 
 pub struct App {
@@ -78,7 +86,7 @@ pub struct App {
 
 impl App {
     pub fn new(conn: Connection) -> Self {
-        let results = db::list_recent(&conn, 50).unwrap_or_default();
+        let results = db::list_recent(&conn, 50, None).unwrap_or_default();
         let status_message = format!("{} session(s)", results.len());
         Self {
             mode: Mode::Normal,
@@ -275,7 +283,8 @@ impl App {
             }
             Message::CopyResumeCmd => {
                 if let Some(result) = self.results.get(self.selected) {
-                    let cmd = format!("claude --resume {}", result.session_id);
+                    let app = SourceApp::parse(&result.source).unwrap_or(SourceApp::ClaudeCode);
+                    let cmd = app.resume_cmd(&result.session_id);
                     self.status_message = format!("Resume: {cmd}");
                 }
             }
@@ -316,6 +325,7 @@ impl App {
                     self.exit_action = Some(ExitAction::Resume {
                         session_id: result.session_id.clone(),
                         cwd: result.cwd.clone(),
+                        source: result.source.clone(),
                     });
                     self.should_quit = true;
                 }
@@ -325,6 +335,7 @@ impl App {
                     self.exit_action = Some(ExitAction::Fork {
                         session_id: result.session_id.clone(),
                         cwd: result.cwd.clone(),
+                        source: result.source.clone(),
                     });
                     self.should_quit = true;
                 }
@@ -333,7 +344,7 @@ impl App {
     }
 
     fn load_recent(&mut self) {
-        self.results = db::list_recent(&self.conn, 50).unwrap_or_default();
+        self.results = db::list_recent(&self.conn, 50, None).unwrap_or_default();
         self.status_message = format!("{} session(s)", self.results.len());
         self.selected = 0;
         self.scroll_offset = 0;
@@ -352,10 +363,40 @@ impl App {
             return;
         }
 
-        let normalized = db::normalize_fts_query(&query_str);
-        match db::search(&self.conn, &normalized, None, None, None, 50) {
+        let parsed = search::parse_query(&query_str);
+
+        // If only filters and no text, list recent with filters
+        if parsed.text.is_empty() {
+            let source = parsed.source_filter();
+            match db::list_recent(&self.conn, 50, source) {
+                Ok(rows) => {
+                    self.search_terms.clear();
+                    self.status_message = format!("{} session(s)", rows.len());
+                    self.results = rows;
+                    self.selected = 0;
+                    self.scroll_offset = 0;
+                }
+                Err(_) => {
+                    self.status_message = "Error".to_string();
+                }
+            }
+            self.last_query = query_str;
+            return;
+        }
+
+        let normalized = db::normalize_fts_query(&parsed.text);
+        let source = parsed.source_filter();
+        match db::search(
+            &self.conn,
+            &normalized,
+            parsed.file.as_deref(),
+            parsed.branch.as_deref(),
+            parsed.project.as_deref(),
+            source,
+            50,
+        ) {
             Ok(rows) => {
-                self.search_terms = search::query_terms(&query_str);
+                self.search_terms = search::query_terms(&parsed.text);
                 self.status_message = format!("{} result(s)", rows.len());
                 self.results = rows;
                 self.selected = 0;
@@ -376,8 +417,8 @@ impl App {
             None => return,
         };
 
-        if let Some(path) = search::session_jsonl_path(&result.session_id, &result.slug) {
-            match indexer::extract_messages(&path) {
+        if let Some((app, path)) = search::session_jsonl_path(&result.session_id, &result.slug, &result.source) {
+            match indexer::extract_messages_for(&path, &app) {
                 Ok(msgs) => {
                     // Find match indices
                     self.detail_match_indices = msgs

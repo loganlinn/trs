@@ -5,7 +5,7 @@ use crossterm::style::{Attribute, Color, ResetColor, SetAttribute, SetForeground
 use regex::Regex;
 
 use crate::search;
-use crate::session::{Message, MessageRole, SearchResult};
+use crate::session::{App, Message, MessageRole, SearchResult};
 
 const GROUP_SEP: &str = "--";
 
@@ -123,10 +123,9 @@ pub fn print_session_footer(
     row: &SearchResult,
     color: bool,
 ) -> std::io::Result<()> {
-    let cmd = if row.source.is_empty() || row.source.starts_with("claude") {
-        format!("claude --resume {}", row.session_id)
-    } else {
-        format!("{}  {}", row.source, row.session_id)
+    let cmd = match App::parse(&row.source) {
+        Some(app) => app.resume_cmd(&row.session_id),
+        None => format!("{}  {}", row.source, row.session_id),
     };
     if color {
         writeln!(

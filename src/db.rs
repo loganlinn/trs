@@ -169,6 +169,7 @@ pub fn search(
     file_pat: Option<&str>,
     branch_pat: Option<&str>,
     project_pat: Option<&str>,
+    source_filter: Option<&str>,
     limit: i64,
 ) -> Result<Vec<SearchResult>> {
     let mut where_clauses = Vec::new();
@@ -185,6 +186,10 @@ pub fn search(
     if let Some(pp) = project_pat {
         where_clauses.push("s.cwd LIKE ?".to_string());
         params.push(Box::new(format!("%{pp}%")));
+    }
+    if let Some(src) = source_filter {
+        where_clauses.push("s.source = ?".to_string());
+        params.push(Box::new(src.to_string()));
     }
 
     let where_sql = if where_clauses.is_empty() {
@@ -241,33 +246,41 @@ pub fn search(
 }
 
 /// List recent sessions ordered by start_time descending.
-pub fn list_recent(conn: &Connection, limit: i64) -> Result<Vec<SearchResult>> {
-    let mut stmt = conn.prepare(
-        "SELECT * FROM sessions ORDER BY start_time DESC LIMIT ?1",
-    )?;
-    let rows = stmt
-        .query_map([limit], |row| {
-            Ok(SearchResult {
-                session_id: row.get("session_id")?,
-                source: row.get::<_, String>("source").unwrap_or_default(),
-                cwd: row.get::<_, String>("cwd").unwrap_or_default(),
-                slug: row.get::<_, String>("slug").unwrap_or_default(),
-                git_branches: row.get::<_, String>("git_branches").unwrap_or_default(),
-                start_time: row.get::<_, String>("start_time").unwrap_or_default(),
-                end_time: row.get::<_, String>("end_time").unwrap_or_default(),
-                files_touched: row.get::<_, String>("files_touched").unwrap_or_default(),
-                tools_used: row.get::<_, String>("tools_used").unwrap_or_default(),
-                message_count: row.get::<_, i64>("message_count").unwrap_or_default(),
-                first_message: row.get::<_, String>("first_message").unwrap_or_default(),
-                summary: row.get::<_, String>("summary").unwrap_or_default(),
-                content_hash: row
-                    .get::<_, Option<String>>("content_hash")
-                    .unwrap_or_default(),
-                metadata: row.get::<_, Option<String>>("metadata").unwrap_or_default(),
-                rank: 0.0,
-            })
-        })?
-        .collect::<Result<Vec<_>, _>>()?;
+pub fn list_recent(conn: &Connection, limit: i64, source_filter: Option<&str>) -> Result<Vec<SearchResult>> {
+    let sql = if source_filter.is_some() {
+        "SELECT * FROM sessions WHERE source = ?2 ORDER BY start_time DESC LIMIT ?1"
+    } else {
+        "SELECT * FROM sessions ORDER BY start_time DESC LIMIT ?1"
+    };
+    let mut stmt = conn.prepare(sql)?;
+    let param_fn = |row: &rusqlite::Row| -> rusqlite::Result<SearchResult> {
+        Ok(SearchResult {
+            session_id: row.get("session_id")?,
+            source: row.get::<_, String>("source").unwrap_or_default(),
+            cwd: row.get::<_, String>("cwd").unwrap_or_default(),
+            slug: row.get::<_, String>("slug").unwrap_or_default(),
+            git_branches: row.get::<_, String>("git_branches").unwrap_or_default(),
+            start_time: row.get::<_, String>("start_time").unwrap_or_default(),
+            end_time: row.get::<_, String>("end_time").unwrap_or_default(),
+            files_touched: row.get::<_, String>("files_touched").unwrap_or_default(),
+            tools_used: row.get::<_, String>("tools_used").unwrap_or_default(),
+            message_count: row.get::<_, i64>("message_count").unwrap_or_default(),
+            first_message: row.get::<_, String>("first_message").unwrap_or_default(),
+            summary: row.get::<_, String>("summary").unwrap_or_default(),
+            content_hash: row
+                .get::<_, Option<String>>("content_hash")
+                .unwrap_or_default(),
+            metadata: row.get::<_, Option<String>>("metadata").unwrap_or_default(),
+            rank: 0.0,
+        })
+    };
+    let rows = if let Some(src) = source_filter {
+        stmt.query_map(rusqlite::params![limit, src], param_fn)?
+            .collect::<Result<Vec<_>, _>>()?
+    } else {
+        stmt.query_map([limit], param_fn)?
+            .collect::<Result<Vec<_>, _>>()?
+    };
     Ok(rows)
 }
 
@@ -388,7 +401,7 @@ mod tests {
         };
         upsert_session(&conn, &sess, 1234.0).unwrap();
 
-        let results = search(&conn, "LaunchDarkly", None, None, None, 10).unwrap();
+        let results = search(&conn, "LaunchDarkly", None, None, None, None, 10).unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].session_id, "test-123");
     }
@@ -461,11 +474,44 @@ mod tests {
         upsert_session(&conn, &sess, 1.0).unwrap();
 
         // Should find with matching project filter
-        let results = search(&conn, "rust", None, None, Some("myapp"), 10).unwrap();
+        let results = search(&conn, "rust", None, None, Some("myapp"), None, 10).unwrap();
         assert_eq!(results.len(), 1);
 
         // Should not find with non-matching project filter
-        let results = search(&conn, "rust", None, None, Some("other"), 10).unwrap();
+        let results = search(&conn, "rust", None, None, Some("other"), None, 10).unwrap();
         assert_eq!(results.len(), 0);
+    }
+
+    #[test]
+    fn test_search_source_filter() {
+        let conn = test_db();
+        let claude_sess = Session {
+            session_id: "claude-1".into(),
+            source: "claude-code".into(),
+            body: "working on feature X".into(),
+            ..Default::default()
+        };
+        let codex_sess = Session {
+            session_id: "codex-1".into(),
+            source: "codex".into(),
+            body: "working on feature X".into(),
+            ..Default::default()
+        };
+        upsert_session(&conn, &claude_sess, 1.0).unwrap();
+        upsert_session(&conn, &codex_sess, 1.0).unwrap();
+
+        // No filter: both
+        let results = search(&conn, "feature", None, None, None, None, 10).unwrap();
+        assert_eq!(results.len(), 2);
+
+        // Filter claude-code
+        let results = search(&conn, "feature", None, None, None, Some("claude-code"), 10).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].source, "claude-code");
+
+        // Filter codex
+        let results = search(&conn, "feature", None, None, None, Some("codex"), 10).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].source, "codex");
     }
 }

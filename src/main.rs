@@ -17,8 +17,7 @@ use anyhow::Result;
 use clap::Parser;
 
 use crate::cli::{Cli, Command, DbCommand};
-use crate::config::FieldProfile;
-use crate::session::{IngestRecord, INGEST_SCHEMA};
+use crate::session::{App, IngestRecord, INGEST_SCHEMA};
 
 fn main() {
     let cli = Cli::parse();
@@ -52,19 +51,23 @@ fn run(cli: Cli) -> Result<i32> {
                 return Ok(1);
             }
 
+            let app_filter = args.app_filter();
+
             // Auto-index unless --no-index
             if !args.no_index {
-                indexer::run_index(&db_path, false)?;
+                indexer::run_index(&db_path, false, app_filter.as_ref())?;
             }
 
             let query = db::normalize_fts_query(&query_str);
             let (ctx_before, ctx_after) = args.effective_context();
+            let source_str = app_filter.map(|a| a.source_str().to_string());
             let found = search::run_search(
                 &query,
                 &db_path,
                 args.file_pat.as_deref(),
                 args.branch_pat.as_deref(),
                 args.project_pat.as_deref(),
+                source_str.as_deref(),
                 args.limit,
                 ctx_before,
                 ctx_after,
@@ -73,7 +76,8 @@ fn run(cli: Cli) -> Result<i32> {
             Ok(if found { 0 } else { 2 })
         }
         Some(Command::Index(args)) => {
-            indexer::run_index(&db_path, args.full)?;
+            let app_filter = args.app_filter();
+            indexer::run_index(&db_path, args.full, app_filter.as_ref())?;
             Ok(0)
         }
         Some(Command::Ingest(args)) => {
@@ -86,13 +90,6 @@ fn run(cli: Cli) -> Result<i32> {
         }
         Some(Command::Schema(args)) => {
             run_schema(args.as_json)?;
-            Ok(0)
-        }
-        Some(Command::Profiles(args)) => {
-            let cfg_path = args
-                .config_path
-                .unwrap_or_else(config::default_profiles_path);
-            run_profiles(&cfg_path)?;
             Ok(0)
         }
         None => {
@@ -110,11 +107,19 @@ fn run(cli: Cli) -> Result<i32> {
     }
 }
 
-/// Replace the current process with `claude --resume <id>` (or --fork-session).
+/// Replace the current process with the appropriate `--resume` command.
 fn exec_exit_action(action: tui::ExitAction) -> ! {
-    let (session_id, cwd, fork) = match action {
-        tui::ExitAction::Resume { session_id, cwd } => (session_id, cwd, false),
-        tui::ExitAction::Fork { session_id, cwd } => (session_id, cwd, true),
+    let (session_id, cwd, source, fork) = match action {
+        tui::ExitAction::Resume {
+            session_id,
+            cwd,
+            source,
+        } => (session_id, cwd, source, false),
+        tui::ExitAction::Fork {
+            session_id,
+            cwd,
+            source,
+        } => (session_id, cwd, source, true),
     };
     if !cwd.is_empty() {
         let dir = Path::new(&cwd);
@@ -126,41 +131,21 @@ fn exec_exit_action(action: tui::ExitAction) -> ! {
             eprintln!("Warning: session cwd not found: {cwd}");
         }
     }
-    let mut cmd = process::Command::new("claude");
+    let app = App::parse(&source).unwrap_or(App::ClaudeCode);
+    let bin = app.bin_name();
+    let mut cmd = process::Command::new(bin);
     cmd.arg("--resume").arg(&session_id);
     if fork {
         cmd.arg("--fork-session");
     }
     let err = cmd.exec();
-    eprintln!("Failed to exec claude: {err}");
+    eprintln!("Failed to exec {bin}: {err}");
     process::exit(1);
 }
 
 // --- Ingest ---
 
 fn run_ingest(db_path: &Path, args: &cli::IngestArgs) -> Result<()> {
-    let resolved_profile: Option<FieldProfile> = if let Some(ref profile_name) = args.profile {
-        let cfg_path = args
-            .config_path
-            .clone()
-            .unwrap_or_else(config::default_profiles_path);
-        let cfg = config::load_profiles(&cfg_path)?;
-        let profile = cfg
-            .profiles
-            .get(profile_name)
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "Profile {:?} not found in {}",
-                    profile_name,
-                    cfg_path.display()
-                )
-            })?
-            .clone();
-        Some(profile)
-    } else {
-        None
-    };
-
     let conn = db::open_db(db_path, true)?;
     let existing = db::get_content_hashes(&conn)?;
 
@@ -183,38 +168,12 @@ fn run_ingest(db_path: &Path, args: &cli::IngestArgs) -> Result<()> {
             continue;
         }
 
-        let record: IngestRecord = if let Some(ref profile) = resolved_profile {
-            match serde_json::from_str::<serde_json::Value>(&raw) {
-                Ok(serde_json::Value::Object(map)) => {
-                    let mapped = config::apply_profile(&map, profile);
-                    match serde_json::from_value(serde_json::Value::Object(mapped)) {
-                        Ok(r) => r,
-                        Err(e) => {
-                            eprintln!("Line {}: validation error -- {e}", lineno + 1);
-                            errors += 1;
-                            continue;
-                        }
-                    }
-                }
-                Ok(_) => {
-                    eprintln!("Line {}: expected JSON object", lineno + 1);
-                    errors += 1;
-                    continue;
-                }
-                Err(e) => {
-                    eprintln!("Line {}: parse error -- {e}", lineno + 1);
-                    errors += 1;
-                    continue;
-                }
-            }
-        } else {
-            match serde_json::from_str(&raw) {
-                Ok(r) => r,
-                Err(e) => {
-                    eprintln!("Line {}: validation error -- {e}", lineno + 1);
-                    errors += 1;
-                    continue;
-                }
+        let record: IngestRecord = match serde_json::from_str(&raw) {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("Line {}: validation error -- {e}", lineno + 1);
+                errors += 1;
+                continue;
             }
         };
 
@@ -379,37 +338,3 @@ fn build_json_schema() -> serde_json::Value {
     })
 }
 
-// --- Profiles ---
-
-fn run_profiles(cfg_path: &Path) -> Result<()> {
-    let cfg = config::load_profiles(cfg_path)?;
-    if cfg.profiles.is_empty() {
-        eprintln!("No profiles found in {}", cfg_path.display());
-        return Ok(());
-    }
-    eprintln!(
-        "{} profile(s) in {}\n",
-        cfg.profiles.len(),
-        cfg_path.display()
-    );
-    for (name, prof) in &cfg.profiles {
-        let src = prof
-            .source
-            .as_deref()
-            .map(|s| format!("source={s}"))
-            .unwrap_or_else(|| "--".into());
-        let field_count = prof.fields.len();
-        let default_count = prof.defaults.len();
-        let mut parts = vec![format!("{name:<16}"), format!("{src:<20}")];
-        if field_count > 0 {
-            let s = if field_count != 1 { "s" } else { "" };
-            parts.push(format!("{field_count} field mapping{s}"));
-        }
-        if default_count > 0 {
-            let s = if default_count != 1 { "s" } else { "" };
-            parts.push(format!("{default_count} default{s}"));
-        }
-        println!("  {}", parts.join("  "));
-    }
-    Ok(())
-}

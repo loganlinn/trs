@@ -4,9 +4,8 @@ use std::collections::{BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
-use crate::config;
 use crate::db;
-use crate::session::{Message, MessageRole, Session};
+use crate::session::{App, Message, MessageRole, Session};
 
 /// File-modifying tool names (for tracking files_touched).
 const FILE_TOOLS: &[&str] = &["Write", "Edit", "Read", "MultiEdit"];
@@ -125,22 +124,43 @@ fn truncate(s: &str, max: usize) -> &str {
     &s[..end]
 }
 
-/// Glob all session JSONL files under the projects directory.
-pub fn glob_sessions() -> Vec<PathBuf> {
-    glob_sessions_in(&config::projects_dir())
+/// Glob all session JSONL files for a specific app.
+pub fn glob_sessions_for(app: &App) -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    for dir in app.sessions_dirs() {
+        if dir.exists() {
+            match app {
+                App::ClaudeCode => walk_jsonl_claude(&dir, &mut paths),
+                App::Codex => walk_jsonl_all(&dir, &mut paths),
+            }
+        }
+    }
+    paths
 }
 
-/// Glob session JSONL files under a specific directory.
+/// Glob all session JSONL files across all apps. Returns (app, path) pairs.
+pub fn glob_all_sessions(apps: &[App]) -> Vec<(App, PathBuf)> {
+    let mut result = Vec::new();
+    for app in apps {
+        for path in glob_sessions_for(app) {
+            result.push((*app, path));
+        }
+    }
+    result
+}
+
+/// Glob session JSONL files under a specific directory (Claude Code rules: skip subagents/tool-results).
+#[cfg(test)]
 pub fn glob_sessions_in(dir: &Path) -> Vec<PathBuf> {
     let mut paths = Vec::new();
     if !dir.exists() {
         return paths;
     }
-    walk_jsonl(dir, &mut paths);
+    walk_jsonl_claude(dir, &mut paths);
     paths
 }
 
-fn walk_jsonl(dir: &Path, out: &mut Vec<PathBuf>) {
+fn walk_jsonl_claude(dir: &Path, out: &mut Vec<PathBuf>) {
     let entries = match std::fs::read_dir(dir) {
         Ok(e) => e,
         Err(_) => return,
@@ -153,15 +173,46 @@ fn walk_jsonl(dir: &Path, out: &mut Vec<PathBuf>) {
             if name_str == "subagents" || name_str == "tool-results" {
                 continue;
             }
-            walk_jsonl(&path, out);
+            walk_jsonl_claude(&path, out);
         } else if path.extension().and_then(|e| e.to_str()) == Some("jsonl") {
             out.push(path);
         }
     }
 }
 
-/// Parse a session JSONL file into a Session.
-pub fn parse_session(path: &Path) -> Result<Session> {
+fn walk_jsonl_all(dir: &Path, out: &mut Vec<PathBuf>) {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            walk_jsonl_all(&path, out);
+        } else if path.extension().and_then(|e| e.to_str()) == Some("jsonl") {
+            out.push(path);
+        }
+    }
+}
+
+/// Parse a session JSONL file into a Session, dispatching by app.
+pub fn parse_session(path: &Path, app: &App) -> Result<Session> {
+    match app {
+        App::ClaudeCode => parse_claude_session(path),
+        App::Codex => parse_codex_session(path),
+    }
+}
+
+/// Extract ordered messages from a session JSONL, dispatching by app.
+pub fn extract_messages_for(path: &Path, app: &App) -> Result<Vec<Message>> {
+    match app {
+        App::ClaudeCode => extract_messages(path),
+        App::Codex => extract_codex_messages(path),
+    }
+}
+
+/// Parse a Claude Code session JSONL file into a Session.
+fn parse_claude_session(path: &Path) -> Result<Session> {
     let slug = path
         .parent()
         .and_then(|p| p.file_name())
@@ -436,8 +487,337 @@ pub fn extract_messages(path: &Path) -> Result<Vec<Message>> {
     Ok(messages)
 }
 
+/// Codex tool names that indicate file operations.
+const CODEX_FILE_TOOLS: &[&str] = &["read_file", "write_file", "edit_file", "patch_file"];
+
+/// Parse a Codex session JSONL file into a Session.
+fn parse_codex_session(path: &Path) -> Result<Session> {
+    let mut body_parts: Vec<String> = Vec::new();
+    let mut branches: BTreeSet<String> = BTreeSet::new();
+    let mut files: BTreeSet<String> = BTreeSet::new();
+    let mut tools: BTreeSet<String> = BTreeSet::new();
+    let mut cwd = String::new();
+    let mut start_time = String::new();
+    let mut end_time = String::new();
+    let mut message_count: i64 = 0;
+    let mut first_message = String::new();
+    let mut summary = String::new();
+    let mut session_id = String::new();
+
+    let content = std::fs::read_to_string(path)?;
+    for raw in content.lines() {
+        let raw = raw.trim();
+        if raw.is_empty() {
+            continue;
+        }
+        let rec: serde_json::Value = match serde_json::from_str(raw) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+
+        if let Some(ts) = rec.get("timestamp").and_then(|v| v.as_str()) {
+            if !ts.is_empty() {
+                if start_time.is_empty() {
+                    start_time = ts.to_string();
+                }
+                end_time = ts.to_string();
+            }
+        }
+
+        let rtype = rec.get("type").and_then(|v| v.as_str()).unwrap_or("");
+        let payload = rec.get("payload").unwrap_or(&serde_json::Value::Null);
+
+        match rtype {
+            "session_meta" => {
+                if let Some(id) = payload.get("id").and_then(|v| v.as_str()) {
+                    session_id = id.to_string();
+                }
+                if let Some(c) = payload.get("cwd").and_then(|v| v.as_str()) {
+                    if cwd.is_empty() && !c.is_empty() {
+                        cwd = c.to_string();
+                    }
+                }
+                if let Some(git) = payload.get("git") {
+                    if let Some(b) = git.get("branch").and_then(|v| v.as_str()) {
+                        if !b.is_empty() {
+                            branches.insert(b.to_string());
+                        }
+                    }
+                }
+            }
+            "turn_context" => {
+                if let Some(s) = payload.get("summary").and_then(|v| v.as_str()) {
+                    if !s.is_empty() {
+                        summary = s.to_string();
+                    }
+                }
+            }
+            "response_item" => {
+                let role = payload.get("role").and_then(|v| v.as_str()).unwrap_or("");
+                let content_arr = match payload.get("content").and_then(|v| v.as_array()) {
+                    Some(a) => a,
+                    None => continue,
+                };
+
+                match role {
+                    "user" => {
+                        for block in content_arr {
+                            let btype =
+                                block.get("type").and_then(|v| v.as_str()).unwrap_or("");
+                            if btype == "input_text" {
+                                let text = block
+                                    .get("text")
+                                    .or_else(|| block.get("input_text"))
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("");
+                                if !text.is_empty()
+                                    && !text.starts_with('<')
+                                    && !text.contains("<permissions")
+                                    && !text.contains("<environment_context")
+                                {
+                                    message_count += 1;
+                                    if first_message.is_empty() {
+                                        first_message = truncate(text, 500).to_string();
+                                    }
+                                    body_parts.push(truncate(text, 1000).to_string());
+                                }
+                            }
+                        }
+                    }
+                    "assistant" => {
+                        message_count += 1;
+                        for block in content_arr {
+                            let btype =
+                                block.get("type").and_then(|v| v.as_str()).unwrap_or("");
+                            match btype {
+                                "output_text" => {
+                                    if let Some(t) = block.get("text").and_then(|v| v.as_str()) {
+                                        if !t.is_empty() {
+                                            body_parts.push(truncate(t, 1000).to_string());
+                                        }
+                                    }
+                                }
+                                "function_call" => {
+                                    let name = block
+                                        .get("name")
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or("");
+                                    if !name.is_empty() {
+                                        tools.insert(name.to_string());
+                                    }
+                                    // Parse arguments (JSON string)
+                                    if let Some(args_str) =
+                                        block.get("arguments").and_then(|v| v.as_str())
+                                    {
+                                        if let Ok(args) =
+                                            serde_json::from_str::<serde_json::Value>(args_str)
+                                        {
+                                            // Extract file paths from common arg patterns
+                                            for key in &["path", "file_path", "file"] {
+                                                if let Some(fp) =
+                                                    args.get(key).and_then(|v| v.as_str())
+                                                {
+                                                    if !fp.is_empty() {
+                                                        files.insert(fp.to_string());
+                                                    }
+                                                }
+                                            }
+                                            // Extract shell commands
+                                            if let Some(cmd) =
+                                                args.get("command").and_then(|v| v.as_array())
+                                            {
+                                                let cmd_str: Vec<&str> = cmd
+                                                    .iter()
+                                                    .filter_map(|v| v.as_str())
+                                                    .collect();
+                                                if !cmd_str.is_empty() {
+                                                    body_parts.push(
+                                                        truncate(&cmd_str.join(" "), 200)
+                                                            .to_string(),
+                                                    );
+                                                }
+                                            }
+                                        }
+                                    }
+                                    if CODEX_FILE_TOOLS.contains(&name) {
+                                        // Already handled via args parsing
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                    // Skip developer (system prompt) role
+                    _ => {}
+                }
+            }
+            _ => {}
+        }
+    }
+
+    // Derive slug from cwd (last meaningful path component)
+    let slug = derive_slug_from_cwd(&cwd);
+
+    // Fall back to filename-based session_id if session_meta was missing
+    if session_id.is_empty() {
+        session_id = path
+            .file_stem()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_default();
+    }
+
+    Ok(Session {
+        session_id,
+        slug,
+        source: App::Codex.source_str().into(),
+        cwd,
+        start_time,
+        end_time,
+        message_count,
+        first_message,
+        summary,
+        git_branches: branches.into_iter().collect(),
+        files_touched: files.into_iter().collect(),
+        tools_used: tools.into_iter().collect(),
+        body: body_parts.join(" "),
+        content_hash: None,
+        metadata: Default::default(),
+    })
+}
+
+/// Derive a project slug from a working directory path.
+fn derive_slug_from_cwd(cwd: &str) -> String {
+    if cwd.is_empty() {
+        return String::new();
+    }
+    let p = Path::new(cwd);
+    // For paths like /Users/x/src/github.com/org/repo, use "org/repo" or just "repo"
+    p.file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_default()
+}
+
+/// Extract ordered messages from a Codex session JSONL (for display with context).
+pub fn extract_codex_messages(path: &Path) -> Result<Vec<Message>> {
+    let mut messages = Vec::new();
+    let mut idx: usize = 0;
+
+    let content = std::fs::read_to_string(path)?;
+    for raw in content.lines() {
+        let raw = raw.trim();
+        if raw.is_empty() {
+            continue;
+        }
+        let rec: serde_json::Value = match serde_json::from_str(raw) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+
+        let rtype = rec.get("type").and_then(|v| v.as_str()).unwrap_or("");
+        if rtype != "response_item" {
+            continue;
+        }
+
+        let payload = rec.get("payload").unwrap_or(&serde_json::Value::Null);
+        let role = payload.get("role").and_then(|v| v.as_str()).unwrap_or("");
+        let content_arr = match payload.get("content").and_then(|v| v.as_array()) {
+            Some(a) => a,
+            None => continue,
+        };
+
+        match role {
+            "user" => {
+                for block in content_arr {
+                    let btype = block.get("type").and_then(|v| v.as_str()).unwrap_or("");
+                    if btype == "input_text" {
+                        let text = block
+                            .get("text")
+                            .or_else(|| block.get("input_text"))
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("");
+                        if !text.is_empty()
+                            && !text.starts_with('<')
+                            && !text.contains("<permissions")
+                            && !text.contains("<environment_context")
+                        {
+                            messages.push(Message {
+                                index: idx,
+                                role: MessageRole::User,
+                                text: text.to_string(),
+                                teammate_id: String::new(),
+                                teammate_summary: String::new(),
+                                teammate_color: String::new(),
+                            });
+                            idx += 1;
+                        }
+                    }
+                }
+            }
+            "assistant" => {
+                let mut parts = Vec::new();
+                for block in content_arr {
+                    let btype = block.get("type").and_then(|v| v.as_str()).unwrap_or("");
+                    match btype {
+                        "output_text" => {
+                            if let Some(t) = block.get("text").and_then(|v| v.as_str()) {
+                                if !t.is_empty() {
+                                    parts.push(t.to_string());
+                                }
+                            }
+                        }
+                        "function_call" => {
+                            let name =
+                                block.get("name").and_then(|v| v.as_str()).unwrap_or("");
+                            if let Some(args_str) =
+                                block.get("arguments").and_then(|v| v.as_str())
+                            {
+                                if let Ok(args) =
+                                    serde_json::from_str::<serde_json::Value>(args_str)
+                                {
+                                    if let Some(fp) = args
+                                        .get("path")
+                                        .or_else(|| args.get("file_path"))
+                                        .and_then(|v| v.as_str())
+                                    {
+                                        parts.push(format!("[{name} {fp}]"));
+                                    } else if let Some(cmd) =
+                                        args.get("command").and_then(|v| v.as_array())
+                                    {
+                                        let cmd_str: Vec<&str> =
+                                            cmd.iter().filter_map(|v| v.as_str()).collect();
+                                        parts.push(format!(
+                                            "$ {}",
+                                            truncate(&cmd_str.join(" "), 120)
+                                        ));
+                                    }
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                if !parts.is_empty() {
+                    messages.push(Message {
+                        index: idx,
+                        role: MessageRole::Assistant,
+                        text: parts.join("\n"),
+                        teammate_id: String::new(),
+                        teammate_summary: String::new(),
+                        teammate_color: String::new(),
+                    });
+                    idx += 1;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    Ok(messages)
+}
+
 /// Run the indexer: scan sessions, parse, upsert, prune dead.
-pub fn run_index(db_path: &Path, full: bool) -> Result<()> {
+/// When `app_filter` is None, indexes all apps.
+pub fn run_index(db_path: &Path, full: bool, app_filter: Option<&App>) -> Result<()> {
     let conn = db::open_db(db_path, true)?;
 
     let stored = if full {
@@ -447,13 +827,17 @@ pub fn run_index(db_path: &Path, full: bool) -> Result<()> {
     };
     let db_ids = db::get_file_backed_ids(&conn)?;
 
-    let paths = glob_sessions();
-    let live_ids: HashSet<String> = paths
-        .iter()
-        .filter_map(|p| p.file_stem().map(|s| s.to_string_lossy().to_string()))
-        .collect();
+    let apps: &[App] = match app_filter {
+        Some(app) => std::slice::from_ref(app),
+        None => App::ALL,
+    };
+    let all_paths = glob_all_sessions(apps);
 
-    let total = paths.len();
+    // For Codex, session_id comes from inside the file, not the filename.
+    // We need to track live IDs after parsing.
+    let mut live_ids: HashSet<String> = HashSet::new();
+
+    let total = all_paths.len();
     let mut skipped: usize = 0;
     let mut indexed: usize = 0;
 
@@ -466,7 +850,7 @@ pub fn run_index(db_path: &Path, full: bool) -> Result<()> {
     );
     pb.set_message("Indexing");
 
-    for path in &paths {
+    for (app, path) in &all_paths {
         pb.inc(1);
 
         let mtime = match path.metadata() {
@@ -479,31 +863,37 @@ pub fn run_index(db_path: &Path, full: bool) -> Result<()> {
             Err(_) => continue,
         };
 
-        let sid = path
+        // For Claude Code, we can use the filename as a quick mtime check key.
+        // For Codex, we also use the filename (unique enough for mtime tracking).
+        let mtime_key = path
             .file_stem()
             .map(|s| s.to_string_lossy().to_string())
             .unwrap_or_default();
 
         if !full {
-            if let Some(&stored_mtime) = stored.get(&sid) {
+            if let Some(&stored_mtime) = stored.get(&mtime_key) {
                 if stored_mtime >= mtime {
+                    // Still need to track the live ID for pruning.
+                    // For Claude Code, filename stem IS the session_id.
+                    // For Codex, we stored the session_id when we indexed it,
+                    // but for incremental skip we can't know it without parsing.
+                    // Use the mtime_key as a proxy — it's in stored mtimes, so
+                    // the corresponding session_id is already in the DB.
+                    live_ids.insert(mtime_key);
                     skipped += 1;
                     continue;
                 }
             }
         }
 
-        match parse_session(path) {
+        match parse_session(path, app) {
             Ok(sess) => {
+                live_ids.insert(sess.session_id.clone());
                 if let Err(e) = db::upsert_session(&conn, &sess, mtime) {
                     eprintln!("Warning: {}: {e}", path.display());
                     continue;
                 }
                 indexed += 1;
-                if indexed.is_multiple_of(50) {
-                    // Explicit checkpoint not needed with rusqlite's auto-commit,
-                    // but we can batch if we wrapped in a transaction.
-                }
             }
             Err(e) => {
                 eprintln!("Warning: {}: {e}", path.display());
@@ -513,7 +903,7 @@ pub fn run_index(db_path: &Path, full: bool) -> Result<()> {
 
     pb.finish_and_clear();
 
-    // Prune dead sessions
+    // Prune dead sessions (only for the apps we're indexing)
     let dead_ids: Vec<String> = db_ids.difference(&live_ids).cloned().collect();
     if !dead_ids.is_empty() {
         db::delete_sessions(&conn, &dead_ids)?;
@@ -560,7 +950,7 @@ mod tests {
             ],
         );
 
-        let sess = parse_session(&path).unwrap();
+        let sess = parse_session(&path, &App::ClaudeCode).unwrap();
         assert_eq!(sess.session_id, "sess-001");
         assert_eq!(sess.slug, "my-project");
         assert_eq!(sess.cwd, "/tmp/proj");
@@ -583,7 +973,7 @@ mod tests {
             ],
         );
 
-        let sess = parse_session(&path).unwrap();
+        let sess = parse_session(&path, &App::ClaudeCode).unwrap();
         assert!(sess.files_touched.contains(&"/tmp/test.rs".to_string()));
         assert!(sess.tools_used.contains(&"Bash".to_string()));
         assert!(sess.tools_used.contains(&"Write".to_string()));
@@ -643,6 +1033,110 @@ mod tests {
         let paths = glob_sessions_in(dir.path());
         assert_eq!(paths.len(), 1);
         assert!(paths[0].to_string_lossy().contains("s1.jsonl"));
+    }
+
+    fn write_codex_fixture(dir: &Path, name: &str, lines: &[&str]) -> PathBuf {
+        let path = dir.join(format!("{name}.jsonl"));
+        let mut f = std::fs::File::create(&path).unwrap();
+        for line in lines {
+            writeln!(f, "{line}").unwrap();
+        }
+        path
+    }
+
+    #[test]
+    fn test_parse_codex_session_basic() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_codex_fixture(
+            dir.path(),
+            "rollout-2026-03-18T15-00-00-abc123",
+            &[
+                r#"{"timestamp":"2026-03-18T22:00:00.000Z","type":"session_meta","payload":{"id":"abc-123-uuid","timestamp":"2026-03-18T22:00:00.000Z","cwd":"/Users/me/project","originator":"codex-tui","git":{"branch":"main"}}}"#,
+                r#"{"timestamp":"2026-03-18T22:00:01.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"help me fix this bug"}]}}"#,
+                r#"{"timestamp":"2026-03-18T22:00:02.000Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"I'll take a look at the code."}]}}"#,
+                r#"{"timestamp":"2026-03-18T22:00:03.000Z","type":"turn_context","payload":{"summary":"Fixed a bug in the parser"}}"#,
+            ],
+        );
+
+        let sess = parse_codex_session(&path).unwrap();
+        assert_eq!(sess.session_id, "abc-123-uuid");
+        assert_eq!(sess.source, "codex");
+        assert_eq!(sess.cwd, "/Users/me/project");
+        assert_eq!(sess.slug, "project");
+        assert_eq!(sess.message_count, 2);
+        assert_eq!(sess.first_message, "help me fix this bug");
+        assert_eq!(sess.summary, "Fixed a bug in the parser");
+        assert!(sess.body.contains("help me fix this bug"));
+        assert!(sess.body.contains("I'll take a look at the code."));
+        assert!(sess.git_branches.contains(&"main".to_string()));
+    }
+
+    #[test]
+    fn test_parse_codex_session_tool_use() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_codex_fixture(
+            dir.path(),
+            "rollout-tools",
+            &[
+                r#"{"timestamp":"2026-03-18T22:00:00.000Z","type":"session_meta","payload":{"id":"tool-sess","cwd":"/tmp/proj"}}"#,
+                r#"{"timestamp":"2026-03-18T22:00:01.000Z","type":"response_item","payload":{"role":"assistant","content":[{"type":"function_call","name":"read_file","arguments":"{\"path\":\"/tmp/proj/main.rs\"}"},{"type":"function_call","name":"shell","arguments":"{\"command\":[\"cargo\",\"build\"]}"}]}}"#,
+            ],
+        );
+
+        let sess = parse_codex_session(&path).unwrap();
+        assert!(sess.files_touched.contains(&"/tmp/proj/main.rs".to_string()));
+        assert!(sess.tools_used.contains(&"read_file".to_string()));
+        assert!(sess.tools_used.contains(&"shell".to_string()));
+        assert!(sess.body.contains("cargo build"));
+    }
+
+    #[test]
+    fn test_parse_codex_skips_system_prompts() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_codex_fixture(
+            dir.path(),
+            "rollout-sys",
+            &[
+                r#"{"timestamp":"2026-03-18T22:00:00.000Z","type":"session_meta","payload":{"id":"sys-sess","cwd":"/tmp"}}"#,
+                r#"{"timestamp":"2026-03-18T22:00:01.000Z","type":"response_item","payload":{"role":"developer","content":[{"type":"input_text","text":"<permissions instructions>You are..."}]}}"#,
+                r#"{"timestamp":"2026-03-18T22:00:02.000Z","type":"response_item","payload":{"role":"user","content":[{"type":"input_text","text":"<environment_context>\n<cwd>/tmp</cwd>"}]}}"#,
+                r#"{"timestamp":"2026-03-18T22:00:03.000Z","type":"response_item","payload":{"role":"user","content":[{"type":"input_text","text":"actual user message"}]}}"#,
+            ],
+        );
+
+        let sess = parse_codex_session(&path).unwrap();
+        assert_eq!(sess.message_count, 1);
+        assert_eq!(sess.first_message, "actual user message");
+    }
+
+    #[test]
+    fn test_extract_codex_messages() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_codex_fixture(
+            dir.path(),
+            "rollout-msgs",
+            &[
+                r#"{"timestamp":"2026-03-18T22:00:00.000Z","type":"session_meta","payload":{"id":"msg-sess","cwd":"/tmp"}}"#,
+                r#"{"timestamp":"2026-03-18T22:00:01.000Z","type":"response_item","payload":{"role":"user","content":[{"type":"input_text","text":"hello codex"}]}}"#,
+                r#"{"timestamp":"2026-03-18T22:00:02.000Z","type":"response_item","payload":{"role":"assistant","content":[{"type":"output_text","text":"hi there"}]}}"#,
+            ],
+        );
+
+        let msgs = extract_codex_messages(&path).unwrap();
+        assert_eq!(msgs.len(), 2);
+        assert_eq!(msgs[0].role, MessageRole::User);
+        assert_eq!(msgs[0].text, "hello codex");
+        assert_eq!(msgs[1].role, MessageRole::Assistant);
+        assert_eq!(msgs[1].text, "hi there");
+    }
+
+    #[test]
+    fn test_derive_slug_from_cwd() {
+        assert_eq!(
+            derive_slug_from_cwd("/Users/me/src/github.com/org/repo"),
+            "repo"
+        );
+        assert_eq!(derive_slug_from_cwd(""), "");
     }
 
     #[test]

@@ -48,7 +48,7 @@ pub fn run() -> Result<Option<ExitAction>> {
     // Auto-index before launching TUI
     if db_path.exists() {
         // Incremental index (errors are non-fatal for TUI launch)
-        let _ = crate::indexer::run_index(&db_path, false);
+        let _ = crate::indexer::run_index(&db_path, false, None);
     }
 
     let conn = db::open_db(&db_path, true)?;

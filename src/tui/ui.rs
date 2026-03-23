@@ -468,7 +468,7 @@ fn draw_status_bar(f: &mut Frame, app: &App, area: Rect) {
 
 fn draw_help_overlay(f: &mut Frame, area: Rect) {
     let help_width = 60u16;
-    let help_height = 22u16;
+    let help_height = 28u16;
     let x = area.width.saturating_sub(help_width) / 2;
     let y = area.height.saturating_sub(help_height) / 2;
     let overlay = Rect::new(
@@ -494,7 +494,7 @@ fn draw_help_overlay(f: &mut Frame, area: Rect) {
                 .fg(Color::Yellow)
                 .add_modifier(Modifier::BOLD),
         )),
-        Line::from("  Enter         Resume session (claude --resume)"),
+        Line::from("  Enter         Resume session (--resume)"),
         Line::from("  Shift-Enter   Fork session (--fork-session)"),
         Line::from("  Tab           Open session detail"),
         Line::from("  Esc           Quit (or clear input)"),
@@ -519,6 +519,17 @@ fn draw_help_overlay(f: &mut Frame, area: Rect) {
         Line::from("  /             Focus search input"),
         Line::from("  y             Show session ID"),
         Line::from("  r             Show resume command"),
+        Line::from(""),
+        Line::from(Span::styled(
+            "Search Filters",
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::from("  app:codex     Filter by app (claude/cc, codex/cx)"),
+        Line::from("  p:gamma       Filter by project/cwd"),
+        Line::from("  f:*.rs        Filter by file path"),
+        Line::from("  b:main        Filter by git branch"),
     ];
 
     let paragraph = Paragraph::new(help_text).block(
