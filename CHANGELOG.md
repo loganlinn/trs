@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- **Search term highlighting in results list**: Matched terms are now highlighted (bold red) in the cwd/path, custom title, metadata, and preview fields of each search result, making it clear why a result matched.
+
 ## [0.2.0] - 2026-03-20
 
 ### Added

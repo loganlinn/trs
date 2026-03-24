@@ -108,7 +108,7 @@ fn draw_results(f: &mut Frame, app: &App, area: Rect) {
 fn result_list_item<'a>(
     result: &SearchResult,
     is_selected: bool,
-    _terms: &[String],
+    terms: &[String],
 ) -> ListItem<'a> {
     let branches: Vec<String> = serde_json::from_str(&result.git_branches).unwrap_or_default();
 
@@ -118,6 +118,14 @@ fn result_list_item<'a>(
     } else {
         result.session_id.clone()
     };
+
+    // Session name (from --name or /rename)
+    let title_suffix = result
+        .custom_title
+        .as_deref()
+        .filter(|t| !t.is_empty())
+        .map(|t| format!("  ({t})"))
+        .unwrap_or_default();
 
     let mut meta_parts = Vec::new();
     if !branches.is_empty() {
@@ -190,17 +198,32 @@ fn result_list_item<'a>(
 
     let indicator = if is_selected { "> " } else { "  " };
 
-    let mut lines = vec![Line::from(vec![
-        Span::styled(indicator, select_style),
-        Span::styled(primary, header_style),
-        Span::styled(meta_str, meta_style),
-    ])];
+    let title_style = if is_selected {
+        Style::default()
+            .fg(Color::Cyan)
+            .bg(Color::DarkGray)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD)
+    };
+
+    let highlight_style = Style::default()
+        .fg(Color::Red)
+        .add_modifier(Modifier::BOLD);
+
+    let mut header_spans = vec![Span::styled(indicator, select_style)];
+    header_spans.extend(highlight_spans(&primary, terms, header_style, highlight_style));
+    header_spans.extend(highlight_spans(&title_suffix, terms, title_style, highlight_style));
+    header_spans.extend(highlight_spans(&meta_str, terms, meta_style, highlight_style));
+
+    let mut lines = vec![Line::from(header_spans)];
 
     if !preview.is_empty() {
-        lines.push(Line::from(vec![
-            Span::raw("  "),
-            Span::styled(preview, preview_style),
-        ]));
+        let mut preview_spans = vec![Span::raw("  ")];
+        preview_spans.extend(highlight_spans(&preview, terms, preview_style, highlight_style));
+        lines.push(Line::from(preview_spans));
     }
 
     ListItem::new(lines)
@@ -219,10 +242,10 @@ fn draw_detail(f: &mut Frame, app: &App, area: Rect) {
         None => return,
     };
 
-    let title = if !result.cwd.is_empty() {
-        format!(" {} ", shorten_path(&result.cwd))
-    } else {
-        format!(" {} ", result.session_id)
+    let title = match &result.custom_title {
+        Some(ct) if !ct.is_empty() => format!(" {} ({ct}) ", shorten_path(&result.cwd)),
+        _ if !result.cwd.is_empty() => format!(" {} ", shorten_path(&result.cwd)),
+        _ => format!(" {} ", result.session_id),
     };
 
     let match_info = if !app.detail_match_indices.is_empty() {
@@ -378,45 +401,55 @@ fn message_to_lines<'a>(
     lines
 }
 
-/// Highlight search terms in a single line of text.
-fn highlight_line<'a>(text: &str, terms: &[String]) -> Line<'a> {
+/// Split text into spans, highlighting substrings that match any search term.
+fn highlight_spans<'a>(
+    text: &str,
+    terms: &[String],
+    base_style: Style,
+    hl_style: Style,
+) -> Vec<Span<'a>> {
+    if text.is_empty() {
+        return vec![];
+    }
+    if terms.is_empty() {
+        return vec![Span::styled(text.to_string(), base_style)];
+    }
+
     let escaped: Vec<String> = terms.iter().map(|t| regex::escape(t)).collect();
     let pattern = match regex::RegexBuilder::new(&escaped.join("|"))
         .case_insensitive(true)
         .build()
     {
         Ok(re) => re,
-        Err(_) => {
-            return Line::from(vec![
-                Span::raw(INDENT.to_string()),
-                Span::styled(text.to_string(), Style::default().fg(Color::White)),
-            ]);
-        }
+        Err(_) => return vec![Span::styled(text.to_string(), base_style)],
     };
 
-    let mut spans = vec![Span::raw(INDENT.to_string())];
+    let mut spans = Vec::new();
     let mut last = 0;
     for m in pattern.find_iter(text) {
         if m.start() > last {
             spans.push(Span::styled(
                 text[last..m.start()].to_string(),
-                Style::default().fg(Color::White),
+                base_style,
             ));
         }
-        spans.push(Span::styled(
-            m.as_str().to_string(),
-            Style::default()
-                .fg(Color::Red)
-                .add_modifier(Modifier::BOLD),
-        ));
+        spans.push(Span::styled(m.as_str().to_string(), hl_style));
         last = m.end();
     }
     if last < text.len() {
-        spans.push(Span::styled(
-            text[last..].to_string(),
-            Style::default().fg(Color::White),
-        ));
+        spans.push(Span::styled(text[last..].to_string(), base_style));
     }
+    spans
+}
+
+/// Highlight search terms in a single line of text (for detail view).
+fn highlight_line<'a>(text: &str, terms: &[String]) -> Line<'a> {
+    let hl_style = Style::default()
+        .fg(Color::Red)
+        .add_modifier(Modifier::BOLD);
+    let base_style = Style::default().fg(Color::White);
+    let mut spans = vec![Span::raw(INDENT.to_string())];
+    spans.extend(highlight_spans(text, terms, base_style, hl_style));
     Line::from(spans)
 }
 
@@ -540,6 +573,90 @@ fn draw_help_overlay(f: &mut Frame, area: Rect) {
     );
 
     f.render_widget(paragraph, overlay);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const BASE: Style = Style::new();
+    const HL: Style = Style {
+        fg: Some(Color::Red),
+        ..Style::new()
+    };
+
+    fn terms(t: &[&str]) -> Vec<String> {
+        t.iter().map(|s| s.to_string()).collect()
+    }
+
+    fn span_texts<'a>(spans: &'a [Span<'a>]) -> Vec<(&'a str, Style)> {
+        spans.iter().map(|s| (s.content.as_ref(), s.style)).collect()
+    }
+
+    #[test]
+    fn empty_text_returns_empty() {
+        assert!(highlight_spans("", &terms(&["foo"]), BASE, HL).is_empty());
+    }
+
+    #[test]
+    fn no_terms_returns_whole_text() {
+        let spans = highlight_spans("hello world", &[], BASE, HL);
+        assert_eq!(span_texts(&spans), vec![("hello world", BASE)]);
+    }
+
+    #[test]
+    fn single_match_at_start() {
+        let spans = highlight_spans("foo bar", &terms(&["foo"]), BASE, HL);
+        assert_eq!(span_texts(&spans), vec![("foo", HL), (" bar", BASE)]);
+    }
+
+    #[test]
+    fn single_match_at_end() {
+        let spans = highlight_spans("hello world", &terms(&["world"]), BASE, HL);
+        assert_eq!(span_texts(&spans), vec![("hello ", BASE), ("world", HL)]);
+    }
+
+    #[test]
+    fn multiple_matches() {
+        let spans = highlight_spans("foo bar foo", &terms(&["foo"]), BASE, HL);
+        assert_eq!(
+            span_texts(&spans),
+            vec![("foo", HL), (" bar ", BASE), ("foo", HL)]
+        );
+    }
+
+    #[test]
+    fn case_insensitive() {
+        let spans = highlight_spans("Hello HELLO hello", &terms(&["hello"]), BASE, HL);
+        assert_eq!(
+            span_texts(&spans),
+            vec![("Hello", HL), (" ", BASE), ("HELLO", HL), (" ", BASE), ("hello", HL)]
+        );
+    }
+
+    #[test]
+    fn multiple_terms() {
+        let spans = highlight_spans("the quick brown fox", &terms(&["quick", "fox"]), BASE, HL);
+        assert_eq!(
+            span_texts(&spans),
+            vec![("the ", BASE), ("quick", HL), (" brown ", BASE), ("fox", HL)]
+        );
+    }
+
+    #[test]
+    fn no_match_returns_whole_text() {
+        let spans = highlight_spans("hello world", &terms(&["xyz"]), BASE, HL);
+        assert_eq!(span_texts(&spans), vec![("hello world", BASE)]);
+    }
+
+    #[test]
+    fn regex_special_chars_escaped() {
+        let spans = highlight_spans("foo (bar) baz", &terms(&["(bar)"]), BASE, HL);
+        assert_eq!(
+            span_texts(&spans),
+            vec![("foo ", BASE), ("(bar)", HL), (" baz", BASE)]
+        );
+    }
 }
 
 /// Shorten a path for display: show last 2 components.
