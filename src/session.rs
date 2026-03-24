@@ -84,6 +84,7 @@ pub struct Session {
     pub summary: String,
     pub body: String,
     pub content_hash: Option<String>,
+    pub custom_title: Option<String>,
     pub metadata: HashMap<String, serde_json::Value>,
 }
 
@@ -137,6 +138,7 @@ impl IngestRecord {
             files_touched: self.files_touched.clone(),
             tools_used: self.tools_used.clone(),
             content_hash: self.content_hash.clone(),
+            custom_title: None,
             metadata: self.extra.clone(),
         }
     }
@@ -196,6 +198,7 @@ pub struct SearchResult {
     pub first_message: String,
     pub summary: String,
     pub content_hash: Option<String>,
+    pub custom_title: Option<String>,
     pub metadata: Option<String>,
     pub rank: f64,
 }

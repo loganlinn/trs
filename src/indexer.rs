@@ -233,6 +233,7 @@ fn parse_claude_session(path: &Path) -> Result<Session> {
     let mut message_count: i64 = 0;
     let mut first_message = String::new();
     let mut summary = String::new();
+    let mut custom_title: Option<String> = None;
 
     let content = std::fs::read_to_string(path)?;
     for raw in content.lines() {
@@ -253,6 +254,11 @@ fn parse_claude_session(path: &Path) -> Result<Session> {
         if let Some(b) = rec.get("gitBranch").and_then(|v| v.as_str()) {
             if !b.is_empty() {
                 branches.insert(b.to_string());
+            }
+        }
+        if let Some(ct) = rec.get("customTitle").and_then(|v| v.as_str()) {
+            if !ct.is_empty() {
+                custom_title = Some(ct.to_string());
             }
         }
         if let Some(ts) = rec.get("timestamp").and_then(|v| v.as_str()) {
@@ -359,6 +365,7 @@ fn parse_claude_session(path: &Path) -> Result<Session> {
         tools_used: tools.into_iter().collect(),
         body: body_parts.join(" "),
         content_hash: None,
+        custom_title,
         metadata: Default::default(),
     })
 }
@@ -681,6 +688,7 @@ fn parse_codex_session(path: &Path) -> Result<Session> {
         tools_used: tools.into_iter().collect(),
         body: body_parts.join(" "),
         content_hash: None,
+        custom_title: None,
         metadata: Default::default(),
     })
 }

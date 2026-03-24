@@ -39,15 +39,21 @@ CREATE TABLE IF NOT EXISTS schema_version (version INTEGER PRIMARY KEY);
 ";
 
 #[allow(dead_code)]
-const CURRENT_VERSION: i64 = 2;
+const CURRENT_VERSION: i64 = 3;
 
-const MIGRATIONS: &[(i64, &[&str])] = &[(
-    2,
-    &[
-        "ALTER TABLE sessions ADD COLUMN content_hash TEXT",
-        "ALTER TABLE sessions ADD COLUMN metadata TEXT",
-    ],
-)];
+const MIGRATIONS: &[(i64, &[&str])] = &[
+    (
+        2,
+        &[
+            "ALTER TABLE sessions ADD COLUMN content_hash TEXT",
+            "ALTER TABLE sessions ADD COLUMN metadata TEXT",
+        ],
+    ),
+    (
+        3,
+        &["ALTER TABLE sessions ADD COLUMN custom_title TEXT"],
+    ),
+];
 
 fn run_migrations(conn: &Connection) -> Result<()> {
     conn.execute(
@@ -108,8 +114,8 @@ pub fn upsert_session(conn: &Connection, sess: &Session, mtime: f64) -> Result<(
         "INSERT INTO sessions
             (session_id, source, cwd, slug, git_branches, start_time, end_time,
              files_touched, tools_used, message_count, first_message, summary,
-             indexed_at, source_mtime, content_hash, metadata)
-        VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16)
+             indexed_at, source_mtime, content_hash, custom_title, metadata)
+        VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)
         ON CONFLICT(session_id) DO UPDATE SET
             source=excluded.source, cwd=excluded.cwd, slug=excluded.slug,
             git_branches=excluded.git_branches, start_time=excluded.start_time,
@@ -117,7 +123,8 @@ pub fn upsert_session(conn: &Connection, sess: &Session, mtime: f64) -> Result<(
             tools_used=excluded.tools_used, message_count=excluded.message_count,
             first_message=excluded.first_message, summary=excluded.summary,
             indexed_at=excluded.indexed_at, source_mtime=excluded.source_mtime,
-            content_hash=excluded.content_hash, metadata=excluded.metadata",
+            content_hash=excluded.content_hash, custom_title=excluded.custom_title,
+            metadata=excluded.metadata",
         rusqlite::params![
             sess.session_id,
             sess.source,
@@ -134,6 +141,7 @@ pub fn upsert_session(conn: &Connection, sess: &Session, mtime: f64) -> Result<(
             now,
             mtime,
             sess.content_hash,
+            sess.custom_title,
             metadata_json,
         ],
     )?;
@@ -236,6 +244,9 @@ pub fn search(
                 content_hash: row
                     .get::<_, Option<String>>("content_hash")
                     .unwrap_or_default(),
+                custom_title: row
+                    .get::<_, Option<String>>("custom_title")
+                    .unwrap_or_default(),
                 metadata: row.get::<_, Option<String>>("metadata").unwrap_or_default(),
                 rank: row.get::<_, f64>("rank").unwrap_or_default(),
             })
@@ -269,6 +280,9 @@ pub fn list_recent(conn: &Connection, limit: i64, source_filter: Option<&str>) -
             summary: row.get::<_, String>("summary").unwrap_or_default(),
             content_hash: row
                 .get::<_, Option<String>>("content_hash")
+                .unwrap_or_default(),
+            custom_title: row
+                .get::<_, Option<String>>("custom_title")
                 .unwrap_or_default(),
             metadata: row.get::<_, Option<String>>("metadata").unwrap_or_default(),
             rank: 0.0,

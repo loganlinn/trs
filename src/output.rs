@@ -84,6 +84,21 @@ pub fn print_session_header(
         write!(w, "{primary}")?;
     }
 
+    // Session name (from --name or /rename)
+    if let Some(title) = &row.custom_title {
+        if color {
+            write!(
+                w,
+                "  {}{}({title}){}",
+                SetForegroundColor(Color::Cyan),
+                SetAttribute(Attribute::Bold),
+                SetAttribute(Attribute::Reset),
+            )?;
+        } else {
+            write!(w, "  ({title})")?;
+        }
+    }
+
     // Metadata
     let mut meta_parts = Vec::new();
     if !branches.is_empty() {
@@ -458,6 +473,7 @@ mod tests {
             first_message: String::new(),
             summary: String::new(),
             content_hash: None,
+            custom_title: None,
             metadata: None,
             rank: 0.0,
         };

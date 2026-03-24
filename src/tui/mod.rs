@@ -135,6 +135,7 @@ mod tests {
             first_message: "hello".into(),
             summary: String::new(),
             content_hash: None,
+            custom_title: None,
             metadata: None,
             rank: 0.0,
         });
@@ -200,6 +201,7 @@ mod tests {
                 first_message: String::new(),
                 summary: String::new(),
                 content_hash: None,
+                custom_title: None,
                 metadata: None,
                 rank: 0.0,
             });
