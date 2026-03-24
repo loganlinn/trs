@@ -27,6 +27,7 @@ CREATE TABLE IF NOT EXISTS sessions (
 CREATE VIRTUAL TABLE IF NOT EXISTS sessions_fts USING fts5(
     session_id   UNINDEXED,
     cwd,
+    custom_title,
     git_branches,
     summary,
     first_message,
@@ -39,7 +40,7 @@ CREATE TABLE IF NOT EXISTS schema_version (version INTEGER PRIMARY KEY);
 ";
 
 #[allow(dead_code)]
-const CURRENT_VERSION: i64 = 3;
+const CURRENT_VERSION: i64 = 4;
 
 const MIGRATIONS: &[(i64, &[&str])] = &[
     (
@@ -52,6 +53,26 @@ const MIGRATIONS: &[(i64, &[&str])] = &[
     (
         3,
         &["ALTER TABLE sessions ADD COLUMN custom_title TEXT"],
+    ),
+    (
+        4,
+        &[
+            // Recreate FTS table with custom_title column for title-aware ranking
+            "DROP TABLE IF EXISTS sessions_fts",
+            "CREATE VIRTUAL TABLE sessions_fts USING fts5(
+                session_id UNINDEXED,
+                cwd,
+                custom_title,
+                git_branches,
+                summary,
+                first_message,
+                files_touched,
+                body,
+                tokenize = 'porter unicode61'
+            )",
+            "INSERT INTO sessions_fts (session_id, cwd, custom_title, git_branches, summary, first_message, files_touched, body)
+                SELECT session_id, COALESCE(cwd,''), COALESCE(custom_title,''), COALESCE(git_branches,''), COALESCE(summary,''), COALESCE(first_message,''), COALESCE(files_touched,''), COALESCE(body,'') FROM sessions",
+        ],
     ),
 ];
 
@@ -152,13 +173,15 @@ pub fn upsert_session(conn: &Connection, sess: &Session, mtime: f64) -> Result<(
     )?;
 
     let files_text = sess.files_touched.join(" ");
+    let title_text = sess.custom_title.as_deref().unwrap_or("");
     conn.execute(
         "INSERT INTO sessions_fts
-            (session_id, cwd, git_branches, summary, first_message, files_touched, body)
-        VALUES (?1,?2,?3,?4,?5,?6,?7)",
+            (session_id, cwd, custom_title, git_branches, summary, first_message, files_touched, body)
+        VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
         rusqlite::params![
             sess.session_id,
             sess.cwd,
+            title_text,
             branches_json,
             sess.summary,
             sess.first_message,
@@ -208,9 +231,10 @@ pub fn search(
 
     params.push(Box::new(limit));
 
+    // bm25 weights per FTS column: cwd, custom_title, git_branches, summary, first_message, files_touched, body
     let sql = format!(
         "WITH matches AS (
-            SELECT session_id, rank
+            SELECT session_id, bm25(sessions_fts, 5.0, 10.0, 3.0, 5.0, 3.0, 2.0, 1.0) AS rank
             FROM sessions_fts
             WHERE sessions_fts MATCH ?1
         )
@@ -362,6 +386,15 @@ pub fn delete_sessions(conn: &Connection, ids: &[String]) -> Result<()> {
     Ok(())
 }
 
+/// Append `*` to the last token for FTS5 prefix matching (for as-you-type search).
+pub fn prefix_query(query: &str) -> String {
+    let trimmed = query.trim_end();
+    if trimmed.is_empty() || trimmed.ends_with('*') || trimmed.ends_with('"') {
+        return query.to_string();
+    }
+    format!("{trimmed}*")
+}
+
 /// Quote hyphenated tokens so FTS5 doesn't interpret `-` as NOT.
 pub fn normalize_fts_query(query: &str) -> String {
     if query.contains('"') {
@@ -442,6 +475,15 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM sessions_fts", [], |r| r.get(0))
             .unwrap();
         assert_eq!(fts_count, 1);
+    }
+
+    #[test]
+    fn test_prefix_query() {
+        assert_eq!(prefix_query("sess"), "sess*");
+        assert_eq!(prefix_query("hello world"), "hello world*");
+        assert_eq!(prefix_query("migrat*"), "migrat*");
+        assert_eq!(prefix_query("\"exact phrase\""), "\"exact phrase\"");
+        assert_eq!(prefix_query(""), "");
     }
 
     #[test]

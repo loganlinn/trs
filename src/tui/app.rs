@@ -384,7 +384,7 @@ impl App {
             return;
         }
 
-        let normalized = db::normalize_fts_query(&parsed.text);
+        let normalized = db::prefix_query(&db::normalize_fts_query(&parsed.text));
         let source = parsed.source_filter();
         match db::search(
             &self.conn,
