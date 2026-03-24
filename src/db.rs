@@ -40,7 +40,7 @@ CREATE TABLE IF NOT EXISTS schema_version (version INTEGER PRIMARY KEY);
 ";
 
 #[allow(dead_code)]
-const CURRENT_VERSION: i64 = 4;
+const CURRENT_VERSION: i64 = 5;
 
 const MIGRATIONS: &[(i64, &[&str])] = &[
     (
@@ -70,8 +70,16 @@ const MIGRATIONS: &[(i64, &[&str])] = &[
                 body,
                 tokenize = 'porter unicode61'
             )",
-            "INSERT INTO sessions_fts (session_id, cwd, custom_title, git_branches, summary, first_message, files_touched, body)
-                SELECT session_id, COALESCE(cwd,''), COALESCE(custom_title,''), COALESCE(git_branches,''), COALESCE(summary,''), COALESCE(first_message,''), COALESCE(files_touched,''), COALESCE(body,'') FROM sessions",
+            // Reset source_mtime to force full re-index (FTS schema changed)
+            "UPDATE sessions SET source_mtime = 0",
+        ],
+    ),
+    (
+        5,
+        &[
+            // v4 pre-populated FTS from stale sessions data; clear and force re-index
+            "DELETE FROM sessions_fts",
+            "UPDATE sessions SET source_mtime = 0",
         ],
     ),
 ];
@@ -231,18 +239,39 @@ pub fn search(
 
     params.push(Box::new(limit));
 
-    // bm25 weights per FTS column: cwd, custom_title, git_branches, summary, first_message, files_touched, body
+    // Two-tier ranking: metadata matches always rank above body-only matches.
+    // FTS columns: cwd(1), custom_title(2), git_branches(3), summary(4),
+    //              first_message(5), files_touched(6), body(7)
+    // bm25 weights within each tier: title 20x, cwd/summary 10x, branches/first_message 5x, files 3x, body 1x.
+    // The -1e6 offset guarantees metadata-matching sessions sort before body-only ones.
+    let meta_query = format!(
+        "{{cwd custom_title git_branches summary first_message files_touched}} : ({query})"
+    );
+    params.insert(1, Box::new(meta_query));
+
     let sql = format!(
-        "WITH matches AS (
-            SELECT session_id, bm25(sessions_fts, 5.0, 10.0, 3.0, 5.0, 3.0, 2.0, 1.0) AS rank
-            FROM sessions_fts
-            WHERE sessions_fts MATCH ?1
-        )
-        SELECT s.*, m.rank
-        FROM matches m
-        JOIN sessions s USING (session_id)
+        "WITH
+            all_matches AS (
+                SELECT session_id,
+                    bm25(sessions_fts, 10.0, 20.0, 5.0, 10.0, 5.0, 3.0, 1.0) AS score
+                FROM sessions_fts
+                WHERE sessions_fts MATCH ?1
+            ),
+            meta_matches AS (
+                SELECT session_id
+                FROM sessions_fts
+                WHERE sessions_fts MATCH ?2
+            )
+        SELECT s.*,
+            CASE WHEN m.session_id IS NOT NULL
+                THEN a.score - 1e6
+                ELSE a.score
+            END AS rank
+        FROM all_matches a
+        LEFT JOIN meta_matches m USING (session_id)
+        JOIN sessions s ON s.session_id = a.session_id
         {where_sql}
-        ORDER BY m.rank
+        ORDER BY rank
         LIMIT ?"
     );
 
@@ -513,6 +542,55 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM sessions", [], |r| r.get(0))
             .unwrap();
         assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn test_custom_title_searchable_and_ranked_higher() {
+        let conn = test_db();
+        // Session with "session" only in body
+        let body_sess = Session {
+            session_id: "body-1".into(),
+            source: "claude-code".into(),
+            body: "working on session management code".into(),
+            ..Default::default()
+        };
+        // Session with "session" in custom_title
+        let title_sess = Session {
+            session_id: "title-1".into(),
+            source: "claude-code".into(),
+            custom_title: Some("session-names".into()),
+            body: "some unrelated work".into(),
+            ..Default::default()
+        };
+        upsert_session(&conn, &body_sess, 1.0).unwrap();
+        upsert_session(&conn, &title_sess, 2.0).unwrap();
+
+        let results = search(&conn, "session", None, None, None, None, 10).unwrap();
+        assert_eq!(results.len(), 2);
+        // Title match should rank first (lower bm25 score = better)
+        assert_eq!(results[0].session_id, "title-1");
+        assert_eq!(results[1].session_id, "body-1");
+    }
+
+    #[test]
+    fn test_prefix_search() {
+        let conn = test_db();
+        let sess = Session {
+            session_id: "prefix-1".into(),
+            source: "claude-code".into(),
+            body: "implementing session management".into(),
+            ..Default::default()
+        };
+        upsert_session(&conn, &sess, 1.0).unwrap();
+
+        // Prefix query should match
+        let results = search(&conn, "sess*", None, None, None, None, 10).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].session_id, "prefix-1");
+
+        // Partial without * should not match
+        let results = search(&conn, "sess", None, None, None, None, 10).unwrap();
+        assert_eq!(results.len(), 0);
     }
 
     #[test]

@@ -7,7 +7,7 @@
 - **Search term highlighting in results list**: Matched terms are now highlighted (bold red) in the cwd/path, custom title, metadata, and preview fields of each search result, making it clear why a result matched.
 - **Prefix matching in TUI**: As-you-type search now uses FTS5 prefix queries (e.g. typing "sess" matches "session"), so results appear incrementally while typing.
 - **`custom_title` in FTS index**: Session names (from `--name` / `/rename`) are now full-text indexed and searchable.
-- **Weighted BM25 ranking**: Search results now rank `custom_title` (10x), `cwd`/`summary` (5x), `git_branches`/`first_message` (3x), and `files_touched` (2x) higher than `body` (1x). Title matches surface first.
+- **Two-tier search ranking**: Sessions matching in metadata (title, cwd, summary, first_message, branches, files) always rank above body-only matches. Within each tier, BM25 with column weights (title 20x, cwd/summary 10x, branches/first_message 5x, files 3x, body 1x) determines order.
 - **Help overlay from any screen**: The `?` help overlay now works from both Normal and Detail views, and correctly returns to the previous screen on dismiss.
 
 ## [0.2.0] - 2026-03-20
