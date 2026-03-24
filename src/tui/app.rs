@@ -76,6 +76,9 @@ pub struct App {
     pub detail_match_indices: Vec<usize>,
     pub detail_current_match: usize,
 
+    // Help overlay state — mode to restore when help is dismissed
+    pub help_return_mode: Mode,
+
     // Search state
     pub last_query: String,
     pub search_terms: Vec<String>,
@@ -101,6 +104,7 @@ impl App {
             detail_scroll: 0,
             detail_match_indices: Vec::new(),
             detail_current_match: 0,
+            help_return_mode: Mode::Normal,
             last_query: String::new(),
             search_terms: Vec::new(),
             conn,
@@ -213,7 +217,7 @@ impl App {
             }
             Message::Back => match self.mode {
                 Mode::Help => {
-                    self.mode = Mode::Normal;
+                    self.mode = self.help_return_mode.clone();
                 }
                 Mode::Detail => {
                     self.mode = Mode::Normal;
@@ -268,8 +272,9 @@ impl App {
             }
             Message::ToggleHelp => {
                 if self.mode == Mode::Help {
-                    self.mode = Mode::Normal;
+                    self.mode = self.help_return_mode.clone();
                 } else {
+                    self.help_return_mode = self.mode.clone();
                     self.mode = Mode::Help;
                 }
             }

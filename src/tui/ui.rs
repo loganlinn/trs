@@ -27,7 +27,10 @@ pub fn draw(f: &mut Frame, app: &App) {
         Mode::Normal => draw_results(f, app, chunks[1]),
         Mode::Detail => draw_detail(f, app, chunks[1]),
         Mode::Help => {
-            draw_results(f, app, chunks[1]);
+            match app.help_return_mode {
+                Mode::Detail => draw_detail(f, app, chunks[1]),
+                _ => draw_results(f, app, chunks[1]),
+            }
             draw_help_overlay(f, f.area());
         }
     }
