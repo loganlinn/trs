@@ -1,5 +1,7 @@
 //! App state and update logic (TEA pattern).
 
+use std::time::Instant;
+
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use rusqlite::Connection;
 use tui_input::backend::crossterm::EventHandler;
@@ -82,6 +84,7 @@ pub struct App {
     // Search state
     pub last_query: String,
     pub search_terms: Vec<String>,
+    search_deadline: Option<Instant>,
 
     // Database connection
     conn: Connection,
@@ -107,6 +110,7 @@ impl App {
             help_return_mode: Mode::Normal,
             last_query: String::new(),
             search_terms: Vec::new(),
+            search_deadline: None,
             conn,
         }
     }
@@ -227,9 +231,11 @@ impl App {
                 Mode::Normal => {}
             },
             Message::SearchChanged => {
-                self.perform_search();
+                self.search_deadline =
+                    Some(Instant::now() + std::time::Duration::from_millis(150));
             }
             Message::ClearInput => {
+                self.search_deadline = None;
                 self.input = Input::default();
                 self.load_recent();
             }
@@ -472,6 +478,16 @@ impl App {
             self.scroll_offset = self.selected;
         } else if self.selected >= self.scroll_offset + visible_height {
             self.scroll_offset = self.selected - visible_height + 1;
+        }
+    }
+
+    /// Fire pending debounced search if deadline has passed.
+    pub fn tick(&mut self) {
+        if let Some(deadline) = self.search_deadline {
+            if Instant::now() >= deadline {
+                self.search_deadline = None;
+                self.perform_search();
+            }
         }
     }
 

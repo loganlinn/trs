@@ -70,6 +70,8 @@ fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, app: &mut App
             app.update(msg);
         }
 
+        app.tick();
+
         if app.should_quit {
             return Ok(());
         }
