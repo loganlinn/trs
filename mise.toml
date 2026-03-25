@@ -28,6 +28,7 @@ mkdir -p "$(dirname "$target")"
 install -t "$target" ./target/release/trs
 """
 
+
 [tasks.test]
 run = "cargo test"
 

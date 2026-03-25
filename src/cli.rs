@@ -4,10 +4,20 @@ use std::path::PathBuf;
 use crate::config;
 use crate::session::App;
 
+fn long_version() -> &'static str {
+    let pkg = env!("CARGO_PKG_VERSION");
+    let git = env!("TRS_GIT_DESCRIBE");
+    if git.is_empty() || git.strip_prefix('v') == Some(pkg) {
+        pkg
+    } else {
+        Box::leak(format!("{pkg} ({git})").into_boxed_str())
+    }
+}
+
 #[derive(Parser, Debug)]
 #[command(
     name = "trs",
-    version,
+    version = long_version(),
     about = "Full-text search over chat transcripts",
     long_about = "Full-text search over chat transcripts.\n\n\
         When called with no arguments in an interactive terminal, opens the TUI.\n\

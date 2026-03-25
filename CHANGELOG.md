@@ -9,6 +9,13 @@
 - **`custom_title` in FTS index**: Session names (from `--name` / `/rename`) are now full-text indexed and searchable.
 - **Two-tier search ranking**: Sessions matching in metadata (title, cwd, summary, first_message, branches, files) always rank above body-only matches. Within each tier, BM25 with column weights (title 20x, cwd/summary 10x, branches/first_message 5x, files 3x, body 1x) determines order.
 - **Help overlay from any screen**: The `?` help overlay now works from both Normal and Detail views, and correctly returns to the previous screen on dismiss.
+- **Git describe in `--version`**: Build script embeds `git describe` output so `trs --version` shows the tag/commit (e.g. `0.2.0 (v0.2.0-5-gabcdef)`).
+- **Debounced search input**: TUI search now waits 150ms after the last keystroke before querying, reducing unnecessary work while typing.
+
+### Changed
+
+- **Two-tier search uses separate queries**: Metadata-matching session IDs are collected in a lightweight first query; the main FTS query no longer uses a CTE with two MATCH clauses, improving compatibility and performance.
+- **Prefix wildcard requires 3+ characters**: As-you-type prefix matching now only appends `*` when the last token is at least 3 characters, avoiding overly broad matches on short inputs.
 
 ## [0.2.0] - 2026-03-20
 
