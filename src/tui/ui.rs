@@ -6,9 +6,20 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap};
 use ratatui::Frame;
 
+use crate::display;
 use crate::session::{MessageRole, SearchResult};
 
 use super::app::{App, Mode};
+
+/// TUI color mapping for roles (matches CLI's role_color).
+fn role_color(role: &MessageRole) -> Color {
+    match role {
+        MessageRole::User => Color::Green,
+        MessageRole::Assistant => Color::Blue,
+        MessageRole::Summary => Color::Yellow,
+        MessageRole::Teammate => Color::Cyan,
+    }
+}
 
 /// Main draw function dispatching to the active mode.
 pub fn draw(f: &mut Frame, app: &App) {
@@ -67,7 +78,7 @@ fn draw_search_input(f: &mut Frame, app: &App, area: Rect) {
 fn draw_results(f: &mut Frame, app: &App, area: Rect) {
     if app.results.is_empty() {
         let msg = if app.input.value().is_empty() {
-            "Type to search sessions. Press ? for help."
+            "Type to search sessions. Press Ctrl-/ for help."
         } else {
             "No results."
         };
@@ -115,24 +126,19 @@ fn result_list_item<'a>(
 ) -> ListItem<'a> {
     let branches: Vec<String> = serde_json::from_str(&result.git_branches).unwrap_or_default();
 
-    // Line 1: cwd/path + metadata
+    let has_title = result
+        .custom_title
+        .as_deref()
+        .is_some_and(|t| !t.is_empty());
     let primary = if !result.cwd.is_empty() {
-        shorten_path(&result.cwd)
+        display::project_slug(&result.cwd).to_string()
     } else {
         result.session_id.clone()
     };
 
-    // Session name (from --name or /rename)
-    let title_suffix = result
-        .custom_title
-        .as_deref()
-        .filter(|t| !t.is_empty())
-        .map(|t| format!("  ({t})"))
-        .unwrap_or_default();
-
     let mut meta_parts = Vec::new();
     if !branches.is_empty() {
-        meta_parts.push(format!("@ {}", branches.join(", ")));
+        meta_parts.push(format!("@{}", branches.join(",")));
     }
     if result.start_time.len() >= 10 {
         meta_parts.push(result.start_time[..10].to_string());
@@ -187,6 +193,15 @@ fn result_list_item<'a>(
             .add_modifier(Modifier::BOLD)
     };
 
+    let title_style = if is_selected {
+        Style::default()
+            .fg(Color::Cyan)
+            .bg(Color::DarkGray)
+    } else {
+        Style::default()
+            .fg(Color::Cyan)
+    };
+
     let meta_style = if is_selected {
         Style::default().fg(Color::Gray).bg(Color::DarkGray)
     } else {
@@ -201,25 +216,17 @@ fn result_list_item<'a>(
 
     let indicator = if is_selected { "> " } else { "  " };
 
-    let title_style = if is_selected {
-        Style::default()
-            .fg(Color::Cyan)
-            .bg(Color::DarkGray)
-            .add_modifier(Modifier::BOLD)
-    } else {
-        Style::default()
-            .fg(Color::Cyan)
-            .add_modifier(Modifier::BOLD)
-    };
-
     let highlight_style = Style::default()
         .fg(Color::Red)
         .add_modifier(Modifier::BOLD);
 
     let mut header_spans = vec![Span::styled(indicator, select_style)];
     header_spans.extend(highlight_spans(&primary, terms, header_style, highlight_style));
-    header_spans.extend(highlight_spans(&title_suffix, terms, title_style, highlight_style));
     header_spans.extend(highlight_spans(&meta_str, terms, meta_style, highlight_style));
+    if has_title {
+        let title_text = format!("  {}", result.custom_title.as_deref().unwrap());
+        header_spans.extend(highlight_spans(&title_text, terms, title_style, highlight_style));
+    }
 
     let mut lines = vec![Line::from(header_spans)];
 
@@ -245,10 +252,17 @@ fn draw_detail(f: &mut Frame, app: &App, area: Rect) {
         None => return,
     };
 
-    let title = match &result.custom_title {
-        Some(ct) if !ct.is_empty() => format!(" {} ({ct}) ", shorten_path(&result.cwd)),
-        _ if !result.cwd.is_empty() => format!(" {} ", shorten_path(&result.cwd)),
-        _ => format!(" {} ", result.session_id),
+    let has_title = result
+        .custom_title
+        .as_deref()
+        .is_some_and(|t| !t.is_empty());
+    let title = if has_title {
+        let slug = display::project_slug(&result.cwd);
+        format!(" {} ({slug}) ", result.custom_title.as_deref().unwrap())
+    } else if !result.cwd.is_empty() {
+        format!(" {} ", display::project_slug(&result.cwd))
+    } else {
+        format!(" {} ", result.session_id)
     };
 
     let match_info = if !app.detail_match_indices.is_empty() {
@@ -306,39 +320,27 @@ fn message_to_lines<'a>(
     is_match: bool,
     terms: &[String],
 ) -> Vec<Line<'a>> {
-    let (role_color, marker, role_label) = match msg.role {
-        MessageRole::User => (Color::Magenta, "❯", "user".to_string()),
-        MessageRole::Assistant => (Color::Blue, "●", "claude".to_string()),
-        MessageRole::Summary => (Color::Yellow, "◆", "summary".to_string()),
-        MessageRole::Teammate => {
-            let label = if msg.teammate_id.is_empty() {
-                "claude[teammate]".to_string()
-            } else {
-                format!("claude[{}]", msg.teammate_id)
-            };
-            (Color::Cyan, "●", label)
-        }
-    };
+    let marker = display::role_marker(&msg.role);
+    let label = display::role_label(msg);
+    let rc = role_color(&msg.role);
 
     let mut lines = Vec::new();
 
-    // Role header: "● claude" or "❯ user" — bold, colored, like Claude Code
     let num_style = Style::default().fg(Color::DarkGray);
-    let marker_style = Style::default().fg(role_color);
+    let marker_style = Style::default().fg(rc);
     let label_style = Style::default()
-        .fg(role_color)
+        .fg(rc)
         .add_modifier(Modifier::BOLD);
 
     let mut header_spans = vec![
         Span::styled(format!("{:>3} ", msg.index + 1), num_style),
         Span::styled(format!("{marker} "), marker_style),
-        Span::styled(role_label, label_style),
+        Span::styled(label, label_style),
     ];
 
-    // Match indicator — subtle tag after the role label
     if is_match {
         header_spans.push(Span::styled(
-            " ◀",
+            " \u{25c0}",
             Style::default()
                 .fg(Color::Red)
                 .add_modifier(Modifier::BOLD),
@@ -347,14 +349,13 @@ fn message_to_lines<'a>(
 
     lines.push(Line::from(header_spans));
 
-    // Message body — indented, with term highlighting for matches
+    // Message body
     let text = msg.text.trim();
     let text_lines: Vec<&str> = text.lines().collect();
     let show_count = text_lines.len().min(MAX_BODY_LINES);
 
     for text_line in &text_lines[..show_count] {
         let styled_line = if text_line.starts_with("$ ") {
-            // Shell command — dim green, like a terminal prompt
             Line::from(vec![
                 Span::raw(INDENT),
                 Span::styled(
@@ -363,7 +364,6 @@ fn message_to_lines<'a>(
                 ),
             ])
         } else if text_line.starts_with('[') && text_line.ends_with(']') {
-            // Tool use like [Read /path/to/file] — dim cyan
             Line::from(vec![
                 Span::raw(INDENT),
                 Span::styled(
@@ -372,7 +372,6 @@ fn message_to_lines<'a>(
                 ),
             ])
         } else if is_match && !terms.is_empty() {
-            // Highlight matching terms in body text
             highlight_line(text_line, terms)
         } else {
             let body_color = if is_match {
@@ -391,14 +390,13 @@ fn message_to_lines<'a>(
     if text_lines.len() > MAX_BODY_LINES {
         lines.push(Line::from(Span::styled(
             format!(
-                "{INDENT}… +{} more lines",
+                "{INDENT}\u{2026} +{} more lines",
                 text_lines.len() - MAX_BODY_LINES
             ),
             Style::default().fg(Color::DarkGray),
         )));
     }
 
-    // Blank line separator between messages
     lines.push(Line::from(""));
 
     lines
@@ -477,8 +475,8 @@ fn draw_status_bar(f: &mut Frame, app: &App, area: Rect) {
     };
 
     let right = match app.mode {
-        Mode::Normal => "Enter:resume  S-Enter:fork  Tab:detail  ?:help  Esc:quit",
-        Mode::Detail => "Esc:back  n/N:matches  j/k:scroll  ?:help",
+        Mode::Normal => "Enter:resume  S-Enter:fork  Tab:detail  C-/:help  Esc:quit",
+        Mode::Detail => "Esc:back  n/N:matches  j/k:scroll  C-/:help",
         Mode::Help => "Esc:close",
     };
 
@@ -540,7 +538,7 @@ fn draw_help_overlay(f: &mut Frame, area: Rect) {
         Line::from("  Ctrl-D/Ctrl-B Half-page scroll"),
         Line::from("  y             Show session ID"),
         Line::from("  r             Show resume command"),
-        Line::from("  ?             Toggle this help"),
+        Line::from("  Ctrl-/        Toggle this help"),
         Line::from(""),
         Line::from(Span::styled(
             "Detail View",
@@ -659,15 +657,5 @@ mod tests {
             span_texts(&spans),
             vec![("foo ", BASE), ("(bar)", HL), (" baz", BASE)]
         );
-    }
-}
-
-/// Shorten a path for display: show last 2 components.
-fn shorten_path(path: &str) -> String {
-    let parts: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
-    if parts.len() <= 3 {
-        path.to_string()
-    } else {
-        format!(".../{}", parts[parts.len() - 2..].join("/"))
     }
 }

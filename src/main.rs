@@ -1,6 +1,7 @@
 mod cli;
 mod config;
 mod db;
+mod display;
 mod error;
 mod indexer;
 mod output;
@@ -39,9 +40,10 @@ fn run(cli: Cli) -> Result<i32> {
         Some(Command::Query(args)) => {
             let query_str = args.query.join(" ");
             if query_str.is_empty() {
-                // No query: if interactive, launch TUI; otherwise show help
+                // No query text: launch TUI with filters pre-populated
                 if !cli.no_tui && is_terminal::is_terminal(io::stdout()) {
-                    if let Some(action) = tui::run()? {
+                    let initial = args.to_tui_input();
+                    if let Some(action) = tui::run(&initial)? {
                         exec_exit_action(action);
                     }
                     return Ok(0);
@@ -61,13 +63,16 @@ fn run(cli: Cli) -> Result<i32> {
             let query = db::normalize_fts_query(&query_str);
             let (ctx_before, ctx_after) = args.effective_context();
             let source_str = app_filter.map(|a| a.source_str().to_string());
+            let project_pat = args.project_pat.as_deref().map(search::resolve_project_filter);
+            let date_filter = args.date.as_deref().and_then(search::parse_date_filter);
             let found = search::run_search(
                 &query,
                 &db_path,
                 args.file_pat.as_deref(),
                 args.branch_pat.as_deref(),
-                args.project_pat.as_deref(),
+                project_pat.as_deref(),
                 source_str.as_deref(),
+                date_filter.as_ref(),
                 args.limit,
                 ctx_before,
                 ctx_after,
@@ -95,7 +100,7 @@ fn run(cli: Cli) -> Result<i32> {
         None => {
             // No subcommand: launch TUI if interactive, otherwise show help
             if !cli.no_tui && is_terminal::is_terminal(io::stdout()) {
-                if let Some(action) = tui::run()? {
+                if let Some(action) = tui::run("")? {
                     exec_exit_action(action);
                 }
                 return Ok(0);
@@ -128,7 +133,24 @@ fn exec_exit_action(action: tui::ExitAction) -> ! {
                 eprintln!("Warning: failed to chdir to {cwd}: {e}");
             }
         } else {
-            eprintln!("Warning: session cwd not found: {cwd}");
+            eprintln!("Session directory no longer exists: {cwd}");
+            eprint!("Create empty directory and resume? [y/N] ");
+            io::stdout().flush().ok();
+            let mut answer = String::new();
+            if io::stdin().read_line(&mut answer).is_err()
+                || !answer.trim().eq_ignore_ascii_case("y")
+            {
+                eprintln!("Aborted.");
+                process::exit(1);
+            }
+            if let Err(e) = std::fs::create_dir_all(dir) {
+                eprintln!("Failed to create directory {cwd}: {e}");
+                process::exit(1);
+            }
+            if let Err(e) = std::env::set_current_dir(dir) {
+                eprintln!("Failed to chdir to {cwd}: {e}");
+                process::exit(1);
+            }
         }
     }
     let app = App::parse(&source).unwrap_or(App::ClaudeCode);

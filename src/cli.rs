@@ -139,11 +139,11 @@ pub struct SearchArgs {
     pub limit: i64,
 
     /// Show N messages after each match
-    #[arg(short = 'A', default_value = "1")]
+    #[arg(short = 'A', default_value = "0")]
     pub context_after: usize,
 
     /// Show N messages before each match
-    #[arg(short = 'B', default_value = "1")]
+    #[arg(short = 'B', default_value = "0")]
     pub context_before: usize,
 
     /// Show N messages before and after (overrides -A, -B)
@@ -157,6 +157,11 @@ pub struct SearchArgs {
     /// Filter by source app: claude (cc), codex (cx). Default: all.
     #[arg(short = 'a', long = "app")]
     pub app: Option<String>,
+
+    /// Filter by date: supports operators (>2025-01-01, >=, =, <=, <)
+    /// and shorthands (today, yesterday, 7d, 30d)
+    #[arg(short = 'D', long = "date")]
+    pub date: Option<String>,
 }
 
 impl SearchArgs {
@@ -170,6 +175,48 @@ impl SearchArgs {
 
     pub fn app_filter(&self) -> Option<App> {
         self.app.as_deref().and_then(App::parse)
+    }
+
+    /// Build a TUI search input string from CLI flags.
+    ///
+    /// Resolves paths (e.g. `-p .` becomes the absolute cwd) but displays
+    /// the user's home directory as `~` for brevity.
+    pub fn to_tui_input(&self) -> String {
+        let home = directories::BaseDirs::new().map(|d| d.home_dir().to_path_buf());
+        let abbreviate = |s: &str| -> String {
+            if let Some(ref h) = home {
+                if let Some(rest) = s.strip_prefix(h.to_str().unwrap_or("")) {
+                    return format!("~{rest}");
+                }
+            }
+            s.to_string()
+        };
+
+        let mut parts = Vec::new();
+        if let Some(ref p) = self.project_pat {
+            let resolved = crate::search::resolve_project_filter(p);
+            parts.push(format!("project:{}", abbreviate(&resolved)));
+        }
+        if let Some(ref b) = self.branch_pat {
+            parts.push(format!("branch:{b}"));
+        }
+        if let Some(ref f) = self.file_pat {
+            parts.push(format!("file:{f}"));
+        }
+        if let Some(ref a) = self.app {
+            parts.push(format!("app:{a}"));
+        }
+        if let Some(ref d) = self.date {
+            parts.push(format!("date:{d}"));
+        }
+        if !self.query.is_empty() {
+            parts.push(self.query.join(" "));
+        }
+        let mut s = parts.join(" ");
+        if !s.is_empty() {
+            s.push(' ');
+        }
+        s
     }
 }
 
@@ -287,6 +334,69 @@ mod tests {
     }
 
     #[test]
+    fn test_to_tui_input_project() {
+        let args = SearchArgs {
+            query: vec![],
+            file_pat: None,
+            branch_pat: None,
+            project_pat: Some(".".into()),
+            limit: 20,
+            context_after: 0,
+            context_before: 0,
+            context_both: None,
+            no_index: false,
+            app: None,
+            date: None,
+        };
+        let input = args.to_tui_input();
+        assert!(input.starts_with("project:"));
+        assert!(input.ends_with(' '));
+        // `.` should resolve; shouldn't start with "project:."
+        assert!(!input.starts_with("project:."));
+    }
+
+    #[test]
+    fn test_to_tui_input_multiple_filters() {
+        let args = SearchArgs {
+            query: vec!["search".into(), "terms".into()],
+            file_pat: Some("*.rs".into()),
+            branch_pat: Some("main".into()),
+            project_pat: None,
+            limit: 20,
+            context_after: 0,
+            context_before: 0,
+            context_both: None,
+            no_index: false,
+            app: Some("claude".into()),
+            date: None,
+        };
+        let input = args.to_tui_input();
+        assert!(input.contains("branch:main"));
+        assert!(input.contains("file:*.rs"));
+        assert!(input.contains("app:claude"));
+        assert!(input.contains("search terms"));
+        assert!(input.ends_with(' '));
+    }
+
+    #[test]
+    fn test_to_tui_input_empty() {
+        let args = SearchArgs {
+            query: vec![],
+            file_pat: None,
+            branch_pat: None,
+            project_pat: None,
+            limit: 20,
+            context_after: 0,
+            context_before: 0,
+            context_both: None,
+            no_index: false,
+            app: None,
+            date: None,
+        };
+        assert_eq!(args.to_tui_input(), "");
+    }
+
+    #[test]
     fn test_context_override() {
         let args = SearchArgs {
             query: vec![],
@@ -294,11 +404,12 @@ mod tests {
             branch_pat: None,
             project_pat: None,
             limit: 20,
-            context_after: 1,
-            context_before: 1,
+            context_after: 0,
+            context_before: 0,
             context_both: Some(3),
             no_index: false,
             app: None,
+            date: None,
         };
         assert_eq!(args.effective_context(), (3, 3));
     }

@@ -11,11 +11,19 @@
 - **Help overlay from any screen**: The `?` help overlay now works from both Normal and Detail views, and correctly returns to the previous screen on dismiss.
 - **Git describe in `--version`**: Build script embeds `git describe` output so `trs --version` shows the tag/commit (e.g. `0.2.0 (v0.2.0-5-gabcdef)`).
 - **Debounced search input**: TUI search now waits 150ms after the last keystroke before querying, reducing unnecessary work while typing.
+- **Date filter** (`--date`/`-D`, `date:`/`d:` in TUI): Filter sessions by date with comparison operators (`>`, `>=`, `=`, `<=`, `<`) and shorthands (`today`, `yesterday`, `7d`, `30d`). Partial dates like `2025-03` match all days in the month.
+- **CLI-to-TUI filter parity**: CLI flags (`-p`, `-b`, `-f`, `-a`, `-D`) now seed the TUI search input via `to_tui_input()`. `list_recent` accepts all filter params, so filter-only queries (no search text) apply filters in both CLI and TUI.
+- **Project filter wildcards**: Trailing `/*` or `*` on project filters enables prefix matching. Paths containing `/` use exact match; plain names use substring match.
+- **`display` module**: Extracted shared display logic (project slug, role markers, date formatting, result grouping, snippet building) from `output` and `tui::ui` into `src/display.rs`.
+- **Resume missing directory**: When resuming a session whose cwd no longer exists, prompt to create the directory instead of silently warning.
 
 ### Changed
 
 - **Two-tier search uses separate queries**: Metadata-matching session IDs are collected in a lightweight first query; the main FTS query no longer uses a CTE with two MATCH clauses, improving compatibility and performance.
 - **Prefix wildcard requires 3+ characters**: As-you-type prefix matching now only appends `*` when the last token is at least 3 characters, avoiding overly broad matches on short inputs.
+- **Help keybinding**: Changed from `?` to `Ctrl-/` so help works regardless of input state. Added `Ctrl-j`/`Ctrl-k` as selection aliases.
+- **Context defaults**: `-A`/`-B` default to 0 (was 1).
+- **TUI result layout**: Title shown after metadata instead of inline with path; branches use compact `@branch` format; paths use `display::project_slug`.
 
 ## [0.2.0] - 2026-03-20
 

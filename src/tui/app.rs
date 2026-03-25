@@ -91,12 +91,12 @@ pub struct App {
 }
 
 impl App {
-    pub fn new(conn: Connection) -> Self {
-        let results = db::list_recent(&conn, 50, None).unwrap_or_default();
+    pub fn new(conn: Connection, initial_input: &str) -> Self {
+        let results = db::list_recent(&conn, 50, None, None, None, None, None).unwrap_or_default();
         let status_message = format!("{} session(s)", results.len());
-        Self {
+        let mut app = Self {
             mode: Mode::Normal,
-            input: Input::default(),
+            input: Input::from(initial_input),
             results,
             selected: 0,
             scroll_offset: 0,
@@ -112,14 +112,21 @@ impl App {
             search_terms: Vec::new(),
             search_deadline: None,
             conn,
+        };
+        if !initial_input.is_empty() {
+            app.perform_search();
         }
+        app
     }
 
     /// Handle a key event and return an optional message.
     pub fn handle_key(&mut self, key: KeyEvent) -> Option<Message> {
         match self.mode {
             Mode::Help => match key.code {
-                KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('?') => Some(Message::Back),
+                KeyCode::Esc | KeyCode::Char('q') => Some(Message::Back),
+                KeyCode::Char('/') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    Some(Message::Back)
+                }
                 _ => None,
             },
             Mode::Detail => self.handle_detail_key(key),
@@ -150,8 +157,8 @@ impl App {
             }
             (KeyCode::Char('c'), true) => Some(Message::Quit),
             (KeyCode::Char('u'), true) => Some(Message::ClearInput),
-            (KeyCode::Char('n'), true) => Some(Message::SelectNext),
-            (KeyCode::Char('p'), true) => Some(Message::SelectPrev),
+            (KeyCode::Char('n') | KeyCode::Char('j'), true) => Some(Message::SelectNext),
+            (KeyCode::Char('p') | KeyCode::Char('k'), true) => Some(Message::SelectPrev),
             (KeyCode::Char('d'), true) => Some(Message::ScrollHalfDown),
             (KeyCode::Char('b'), true) => Some(Message::ScrollHalfUp),
             (KeyCode::Up, _) => Some(Message::SelectPrev),
@@ -174,9 +181,7 @@ impl App {
                     None
                 }
             }
-            (KeyCode::Char('?'), false) if self.input.value().is_empty() => {
-                Some(Message::ToggleHelp)
-            }
+            (KeyCode::Char('/'), true) => Some(Message::ToggleHelp),
             (KeyCode::Char('y'), false) if self.input.value().is_empty() => {
                 Some(Message::CopySessionId)
             }
@@ -208,7 +213,7 @@ impl App {
             (KeyCode::Char('N'), false) => Some(Message::PrevMatch),
             (KeyCode::Char('y'), false) => Some(Message::CopySessionId),
             (KeyCode::Char('r'), false) => Some(Message::CopyResumeCmd),
-            (KeyCode::Char('?'), false) => Some(Message::ToggleHelp),
+            (KeyCode::Char('/'), true) => Some(Message::ToggleHelp),
             _ => None,
         }
     }
@@ -355,7 +360,7 @@ impl App {
     }
 
     fn load_recent(&mut self) {
-        self.results = db::list_recent(&self.conn, 50, None).unwrap_or_default();
+        self.results = db::list_recent(&self.conn, 50, None, None, None, None, None).unwrap_or_default();
         self.status_message = format!("{} session(s)", self.results.len());
         self.selected = 0;
         self.scroll_offset = 0;
@@ -379,7 +384,15 @@ impl App {
         // If only filters and no text, list recent with filters
         if parsed.text.is_empty() {
             let source = parsed.source_filter();
-            match db::list_recent(&self.conn, 50, source) {
+            match db::list_recent(
+                &self.conn,
+                50,
+                parsed.file.as_deref(),
+                parsed.branch.as_deref(),
+                parsed.project.as_deref(),
+                source,
+                parsed.date.as_ref(),
+            ) {
                 Ok(rows) => {
                     self.search_terms.clear();
                     self.status_message = format!("{} session(s)", rows.len());
@@ -404,6 +417,7 @@ impl App {
             parsed.branch.as_deref(),
             parsed.project.as_deref(),
             source,
+            parsed.date.as_ref(),
             50,
         ) {
             Ok(rows) => {

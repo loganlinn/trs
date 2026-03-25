@@ -6,7 +6,138 @@ use crate::config;
 use crate::db;
 use crate::indexer;
 use crate::output;
-use crate::session::{App, Message, SearchResult};
+use crate::session::{App, Message};
+
+/// Resolve a project filter value: if it looks like a path (starts with `.`,
+/// `/`, or `~`), canonicalize it to an absolute path. Plain names are
+/// returned as-is for substring matching.
+///
+/// Trailing `/*` or `*` enables prefix matching (children included).
+/// Without a wildcard, paths match exactly and plain names use substring match.
+pub fn resolve_project_filter(value: &str) -> String {
+    let (value, wildcard) = if let Some(v) = value.strip_suffix("/*") {
+        (v, true)
+    } else if let Some(v) = value.strip_suffix('*') {
+        (v, true)
+    } else {
+        (value, false)
+    };
+
+    let resolved = if value.starts_with('.') || value.starts_with('/') || value.starts_with('~') {
+        let expanded = if let Some(rest) = value.strip_prefix('~') {
+            let home = directories::BaseDirs::new()
+                .map(|d| d.home_dir().to_path_buf())
+                .unwrap_or_else(|| Path::new("~").to_path_buf());
+            home.join(rest.strip_prefix('/').unwrap_or(rest))
+        } else {
+            Path::new(value).to_path_buf()
+        };
+        // canonicalize resolves `.`, `..`, and symlinks; fall back to
+        // the expanded (but not canonicalized) path so ~ and . still work
+        // even when the directory doesn't exist
+        match expanded.canonicalize() {
+            Ok(abs) => abs.to_string_lossy().into_owned(),
+            Err(_) => expanded.to_string_lossy().into_owned(),
+        }
+    } else {
+        value.to_string()
+    };
+
+    if wildcard {
+        format!("{resolved}*")
+    } else {
+        resolved
+    }
+}
+
+/// Comparison operator for date filters.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DateOp {
+    Gt,
+    Gte,
+    Eq,
+    Lte,
+    Lt,
+}
+
+/// A parsed date filter with operator and resolved ISO date string.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DateFilter {
+    pub op: DateOp,
+    pub date: String,
+}
+
+impl DateFilter {
+    /// SQL operator string.
+    pub fn sql_op(&self) -> &'static str {
+        match self.op {
+            DateOp::Gt => ">",
+            DateOp::Gte => ">=",
+            DateOp::Eq => "LIKE",
+            DateOp::Lte => "<=",
+            DateOp::Lt => "<",
+        }
+    }
+
+    /// SQL value — for `=` we use prefix match (LIKE 'date%'), otherwise raw.
+    pub fn sql_value(&self) -> String {
+        match self.op {
+            DateOp::Eq => format!("{}%", self.date),
+            _ => self.date.clone(),
+        }
+    }
+}
+
+/// Parse operator prefix from a date filter value, returning (op, rest).
+fn parse_date_op(value: &str) -> (DateOp, &str) {
+    if let Some(rest) = value.strip_prefix(">=") {
+        (DateOp::Gte, rest)
+    } else if let Some(rest) = value.strip_prefix("<=") {
+        (DateOp::Lte, rest)
+    } else if let Some(rest) = value.strip_prefix('>') {
+        (DateOp::Gt, rest)
+    } else if let Some(rest) = value.strip_prefix('<') {
+        (DateOp::Lt, rest)
+    } else if let Some(rest) = value.strip_prefix('=') {
+        (DateOp::Eq, rest)
+    } else {
+        (DateOp::Eq, value)
+    }
+}
+
+/// Resolve relative date shorthands to YYYY-MM-DD strings.
+/// Supports: `today`, `yesterday`, `Nd` (e.g. `7d` = 7 days ago).
+pub fn resolve_date_value(value: &str) -> Option<String> {
+    let today = chrono::Local::now().date_naive();
+    match value {
+        "today" => Some(today.format("%Y-%m-%d").to_string()),
+        "yesterday" => Some(
+            (today - chrono::Duration::days(1))
+                .format("%Y-%m-%d")
+                .to_string(),
+        ),
+        s if s.ends_with('d') => {
+            let n: i64 = s.strip_suffix('d')?.parse().ok()?;
+            Some(
+                (today - chrono::Duration::days(n))
+                    .format("%Y-%m-%d")
+                    .to_string(),
+            )
+        }
+        // Already a date-like string (YYYY-MM-DD or YYYY-MM or YYYY)
+        s if s.len() >= 4 && s.chars().next().map_or(false, |c| c.is_ascii_digit()) => {
+            Some(s.to_string())
+        }
+        _ => None,
+    }
+}
+
+/// Parse a `date:` filter value into a DateFilter.
+pub fn parse_date_filter(raw: &str) -> Option<DateFilter> {
+    let (op, rest) = parse_date_op(raw);
+    let date = resolve_date_value(rest)?;
+    Some(DateFilter { op, date })
+}
 
 /// Parsed search input with extracted filter prefixes.
 #[derive(Debug, Default, Clone)]
@@ -16,6 +147,7 @@ pub struct ParsedQuery {
     pub project: Option<String>,
     pub file: Option<String>,
     pub branch: Option<String>,
+    pub date: Option<DateFilter>,
 }
 
 impl ParsedQuery {
@@ -73,9 +205,10 @@ pub fn parse_query(input: &str) -> ParsedQuery {
 
             match key {
                 "app" | "a" => q.app = Some(value),
-                "project" | "p" => q.project = Some(value),
+                "project" | "p" => q.project = Some(resolve_project_filter(&value)),
                 "file" | "f" => q.file = Some(value),
                 "branch" | "b" => q.branch = Some(value),
+                "date" | "d" => q.date = parse_date_filter(&value),
                 _ => text_parts.push(token), // not a known filter, keep as search text
             }
         } else {
@@ -178,6 +311,7 @@ pub fn run_search(
     branch_pat: Option<&str>,
     project_pat: Option<&str>,
     source_filter: Option<&str>,
+    date_filter: Option<&DateFilter>,
     limit: i64,
     context_before: usize,
     context_after: usize,
@@ -189,7 +323,7 @@ pub fn run_search(
     }
 
     let conn = db::open_db(db_path, false)?;
-    let rows = match db::search(&conn, query, file_pat, branch_pat, project_pat, source_filter, limit) {
+    let rows = match db::search(&conn, query, file_pat, branch_pat, project_pat, source_filter, date_filter, limit) {
         Ok(r) => r,
         Err(e) => {
             eprintln!("Query error: {e}");
@@ -206,79 +340,25 @@ pub fn run_search(
     let terms = query_terms(query);
     eprintln!("{} result(s)\n", rows.len());
 
+    // Build display models
+    let displays: Vec<crate::display::ResultDisplay> = rows
+        .iter()
+        .map(|row| {
+            let messages = session_jsonl_path(&row.session_id, &row.slug, &row.source)
+                .and_then(|(app, path)| indexer::extract_messages_for(&path, &app).ok())
+                .unwrap_or_default();
+            crate::display::prepare_result(row, &messages, &terms, context_before, context_after)
+        })
+        .collect();
+
+    let groups = crate::display::group_results(displays);
+
     let mut writer = std::io::stdout();
-    for row in &rows {
-        display_result(
-            &mut writer,
-            row,
-            &terms,
-            context_before,
-            context_after,
-            color,
-        )?;
+    for group in &groups {
+        output::print_group(&mut writer, group, &terms, color)?;
     }
 
     Ok(true)
-}
-
-/// Display a single search result with optional conversation context.
-fn display_result(
-    w: &mut dyn std::io::Write,
-    row: &SearchResult,
-    terms: &[String],
-    context_before: usize,
-    context_after: usize,
-    color: bool,
-) -> Result<()> {
-    output::print_session_header(w, row, color)?;
-
-    // Try to load and display matching messages with context
-    if let Some((app, jsonl_path)) = session_jsonl_path(&row.session_id, &row.slug, &row.source) {
-        if !terms.is_empty() {
-            if let Ok(messages) = indexer::extract_messages_for(&jsonl_path, &app) {
-                if !messages.is_empty() {
-                    output::display_conversation(
-                        w,
-                        &messages,
-                        terms,
-                        context_before,
-                        context_after,
-                        color,
-                    )?;
-                    output::print_session_footer(w, row, color)?;
-                    writeln!(w)?;
-                    return Ok(());
-                }
-            }
-        }
-    }
-
-    // Fallback: show first_message/summary
-    let desc = if !row.summary.is_empty() {
-        &row.summary
-    } else {
-        &row.first_message
-    };
-    if !desc.is_empty() {
-        let desc = desc.replace('\n', " ");
-        let desc = desc.trim();
-        let desc = if desc.len() > 200 {
-            format!("{}...", &desc[..197])
-        } else {
-            desc.to_string()
-        };
-        if color && !terms.is_empty() {
-            write!(w, "     ")?;
-            output::write_highlighted(w, &desc, terms)?;
-            writeln!(w)?;
-        } else {
-            writeln!(w, "     {desc}")?;
-        }
-    }
-
-    output::print_session_footer(w, row, color)?;
-    writeln!(w)?;
-    Ok(())
 }
 
 #[cfg(test)]
@@ -372,6 +452,77 @@ mod tests {
     }
 
     #[test]
+    fn test_resolve_project_filter_dot() {
+        let resolved = resolve_project_filter(".");
+        let cwd = std::env::current_dir().unwrap();
+        assert_eq!(resolved, cwd.to_string_lossy());
+    }
+
+    #[test]
+    fn test_resolve_project_filter_plain_name() {
+        assert_eq!(resolve_project_filter("myproject"), "myproject");
+    }
+
+    #[test]
+    fn test_resolve_project_filter_absolute() {
+        assert_eq!(resolve_project_filter("/tmp"), "/private/tmp");
+    }
+
+    #[test]
+    fn test_resolve_project_filter_tilde() {
+        let resolved = resolve_project_filter("~/.dotfiles");
+        let home = directories::BaseDirs::new().unwrap();
+        let expected = home.home_dir().join(".dotfiles");
+        assert_eq!(resolved, expected.to_string_lossy());
+    }
+
+    #[test]
+    fn test_resolve_project_filter_nonexistent() {
+        // falls back to raw value when canonicalize fails
+        assert_eq!(
+            resolve_project_filter("./nonexistent-dir-xyz"),
+            "./nonexistent-dir-xyz"
+        );
+    }
+
+    #[test]
+    fn test_resolve_project_filter_wildcard() {
+        // trailing /* preserves wildcard marker
+        let resolved = resolve_project_filter("/tmp/*");
+        assert_eq!(resolved, "/private/tmp*");
+
+        // trailing * also works
+        let resolved = resolve_project_filter("/tmp*");
+        assert_eq!(resolved, "/private/tmp*");
+
+        // plain name with wildcard
+        assert_eq!(resolve_project_filter("gamma*"), "gamma*");
+    }
+
+    #[test]
+    fn test_resolve_project_filter_no_wildcard() {
+        // exact path without wildcard has no trailing *
+        let resolved = resolve_project_filter("/tmp");
+        assert!(!resolved.ends_with('*'));
+    }
+
+    #[test]
+    fn test_parse_query_resolves_project_dot() {
+        let q = parse_query("p:. search terms");
+        let cwd = std::env::current_dir().unwrap();
+        assert_eq!(q.project.as_deref(), Some(cwd.to_str().unwrap()));
+        assert_eq!(q.text, "search terms");
+    }
+
+    #[test]
+    fn test_parse_query_resolves_project_tilde() {
+        let q = parse_query("project:~/.dotfiles");
+        let home = directories::BaseDirs::new().unwrap();
+        let expected = home.home_dir().join(".dotfiles").to_string_lossy().to_string();
+        assert_eq!(q.project.as_deref(), Some(expected.as_str()));
+    }
+
+    #[test]
     fn test_message_matches() {
         use crate::session::{Message, MessageRole};
         let msg = Message {
@@ -387,5 +538,94 @@ mod tests {
 
         let terms = vec!["nonexistent".to_string()];
         assert!(!message_matches(&msg, &terms));
+    }
+
+    #[test]
+    fn test_parse_date_filter_operators() {
+        let f = parse_date_filter(">2025-03-01").unwrap();
+        assert_eq!(f.op, DateOp::Gt);
+        assert_eq!(f.date, "2025-03-01");
+
+        let f = parse_date_filter(">=2025-03-01").unwrap();
+        assert_eq!(f.op, DateOp::Gte);
+
+        let f = parse_date_filter("<=2025-03-01").unwrap();
+        assert_eq!(f.op, DateOp::Lte);
+
+        let f = parse_date_filter("<2025-03-01").unwrap();
+        assert_eq!(f.op, DateOp::Lt);
+
+        let f = parse_date_filter("=2025-03-01").unwrap();
+        assert_eq!(f.op, DateOp::Eq);
+
+        // bare date defaults to Eq
+        let f = parse_date_filter("2025-03-01").unwrap();
+        assert_eq!(f.op, DateOp::Eq);
+        assert_eq!(f.date, "2025-03-01");
+    }
+
+    #[test]
+    fn test_parse_date_filter_shorthands() {
+        let today = chrono::Local::now().date_naive();
+
+        let f = parse_date_filter("today").unwrap();
+        assert_eq!(f.date, today.format("%Y-%m-%d").to_string());
+
+        let f = parse_date_filter("yesterday").unwrap();
+        assert_eq!(
+            f.date,
+            (today - chrono::Duration::days(1))
+                .format("%Y-%m-%d")
+                .to_string()
+        );
+
+        let f = parse_date_filter(">=7d").unwrap();
+        assert_eq!(f.op, DateOp::Gte);
+        assert_eq!(
+            f.date,
+            (today - chrono::Duration::days(7))
+                .format("%Y-%m-%d")
+                .to_string()
+        );
+    }
+
+    #[test]
+    fn test_parse_date_filter_sql() {
+        let f = parse_date_filter(">2025-03-01").unwrap();
+        assert_eq!(f.sql_op(), ">");
+        assert_eq!(f.sql_value(), "2025-03-01");
+
+        let f = parse_date_filter("2025-03-01").unwrap();
+        assert_eq!(f.sql_op(), "LIKE");
+        assert_eq!(f.sql_value(), "2025-03-01%");
+    }
+
+    #[test]
+    fn test_parse_date_filter_invalid() {
+        assert!(parse_date_filter("garbage").is_none());
+        assert!(parse_date_filter(">notadate").is_none());
+    }
+
+    #[test]
+    fn test_parse_query_date_filter() {
+        let q = parse_query("date:>2025-03-01 terraform");
+        assert_eq!(q.text, "terraform");
+        let df = q.date.unwrap();
+        assert_eq!(df.op, DateOp::Gt);
+        assert_eq!(df.date, "2025-03-01");
+
+        // d: alias
+        let q = parse_query("d:>=7d search");
+        assert!(q.date.is_some());
+        assert_eq!(q.date.unwrap().op, DateOp::Gte);
+    }
+
+    #[test]
+    fn test_parse_date_filter_partial_date() {
+        // year-month prefix for matching all days in a month
+        let f = parse_date_filter("2025-03").unwrap();
+        assert_eq!(f.op, DateOp::Eq);
+        assert_eq!(f.date, "2025-03");
+        assert_eq!(f.sql_value(), "2025-03%");
     }
 }

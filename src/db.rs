@@ -2,7 +2,23 @@ use anyhow::{Context, Result};
 use rusqlite::Connection;
 use std::path::Path;
 
+use crate::search::DateFilter;
 use crate::session::{SearchResult, Session};
+
+/// Build a SQL clause and parameter for a filter value.
+///
+/// - `value*` → prefix match: `column LIKE 'value%'`
+/// - value containing `/` → exact match: `column = 'value'`
+/// - plain name → substring match: `column LIKE '%value%'`
+fn filter_clause(column: &str, value: &str) -> (String, String) {
+    if let Some(prefix) = value.strip_suffix('*') {
+        (format!("{column} LIKE ?"), format!("{prefix}%"))
+    } else if value.contains('/') {
+        (format!("{column} = ?"), value.to_string())
+    } else {
+        (format!("{column} LIKE ?"), format!("%{value}%"))
+    }
+}
 
 pub const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS sessions (
@@ -209,26 +225,34 @@ pub fn search(
     branch_pat: Option<&str>,
     project_pat: Option<&str>,
     source_filter: Option<&str>,
+    date_filter: Option<&DateFilter>,
     limit: i64,
 ) -> Result<Vec<SearchResult>> {
     let mut where_clauses = Vec::new();
     let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = vec![Box::new(query.to_string())];
 
     if let Some(fp) = file_pat {
-        where_clauses.push("s.files_touched LIKE ?".to_string());
-        params.push(Box::new(format!("%{fp}%")));
+        let (clause, param) = filter_clause("s.files_touched", fp);
+        where_clauses.push(clause);
+        params.push(Box::new(param));
     }
     if let Some(bp) = branch_pat {
-        where_clauses.push("s.git_branches LIKE ?".to_string());
-        params.push(Box::new(format!("%{bp}%")));
+        let (clause, param) = filter_clause("s.git_branches", bp);
+        where_clauses.push(clause);
+        params.push(Box::new(param));
     }
     if let Some(pp) = project_pat {
-        where_clauses.push("s.cwd LIKE ?".to_string());
-        params.push(Box::new(format!("%{pp}%")));
+        let (clause, param) = filter_clause("s.cwd", pp);
+        where_clauses.push(clause);
+        params.push(Box::new(param));
     }
     if let Some(src) = source_filter {
         where_clauses.push("s.source = ?".to_string());
         params.push(Box::new(src.to_string()));
+    }
+    if let Some(df) = date_filter {
+        where_clauses.push(format!("s.start_time {} ?", df.sql_op()));
+        params.push(Box::new(df.sql_value()));
     }
 
     let where_sql = if where_clauses.is_empty() {
@@ -310,44 +334,79 @@ pub fn search(
 }
 
 /// List recent sessions ordered by start_time descending.
-pub fn list_recent(conn: &Connection, limit: i64, source_filter: Option<&str>) -> Result<Vec<SearchResult>> {
-    let sql = if source_filter.is_some() {
-        "SELECT * FROM sessions WHERE source = ?2 ORDER BY start_time DESC LIMIT ?1"
+pub fn list_recent(
+    conn: &Connection,
+    limit: i64,
+    file_pat: Option<&str>,
+    branch_pat: Option<&str>,
+    project_pat: Option<&str>,
+    source_filter: Option<&str>,
+    date_filter: Option<&DateFilter>,
+) -> Result<Vec<SearchResult>> {
+    let mut where_clauses = Vec::new();
+    let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+
+    if let Some(fp) = file_pat {
+        let (clause, param) = filter_clause("files_touched", fp);
+        where_clauses.push(clause);
+        params.push(Box::new(param));
+    }
+    if let Some(bp) = branch_pat {
+        let (clause, param) = filter_clause("git_branches", bp);
+        where_clauses.push(clause);
+        params.push(Box::new(param));
+    }
+    if let Some(pp) = project_pat {
+        let (clause, param) = filter_clause("cwd", pp);
+        where_clauses.push(clause);
+        params.push(Box::new(param));
+    }
+    if let Some(src) = source_filter {
+        where_clauses.push("source = ?".to_string());
+        params.push(Box::new(src.to_string()));
+    }
+    if let Some(df) = date_filter {
+        where_clauses.push(format!("start_time {} ?", df.sql_op()));
+        params.push(Box::new(df.sql_value()));
+    }
+
+    let where_sql = if where_clauses.is_empty() {
+        String::new()
     } else {
-        "SELECT * FROM sessions ORDER BY start_time DESC LIMIT ?1"
+        format!("WHERE {}", where_clauses.join(" AND "))
     };
-    let mut stmt = conn.prepare(sql)?;
-    let param_fn = |row: &rusqlite::Row| -> rusqlite::Result<SearchResult> {
-        Ok(SearchResult {
-            session_id: row.get("session_id")?,
-            source: row.get::<_, String>("source").unwrap_or_default(),
-            cwd: row.get::<_, String>("cwd").unwrap_or_default(),
-            slug: row.get::<_, String>("slug").unwrap_or_default(),
-            git_branches: row.get::<_, String>("git_branches").unwrap_or_default(),
-            start_time: row.get::<_, String>("start_time").unwrap_or_default(),
-            end_time: row.get::<_, String>("end_time").unwrap_or_default(),
-            files_touched: row.get::<_, String>("files_touched").unwrap_or_default(),
-            tools_used: row.get::<_, String>("tools_used").unwrap_or_default(),
-            message_count: row.get::<_, i64>("message_count").unwrap_or_default(),
-            first_message: row.get::<_, String>("first_message").unwrap_or_default(),
-            summary: row.get::<_, String>("summary").unwrap_or_default(),
-            content_hash: row
-                .get::<_, Option<String>>("content_hash")
-                .unwrap_or_default(),
-            custom_title: row
-                .get::<_, Option<String>>("custom_title")
-                .unwrap_or_default(),
-            metadata: row.get::<_, Option<String>>("metadata").unwrap_or_default(),
-            rank: 0.0,
-        })
-    };
-    let rows = if let Some(src) = source_filter {
-        stmt.query_map(rusqlite::params![limit, src], param_fn)?
-            .collect::<Result<Vec<_>, _>>()?
-    } else {
-        stmt.query_map([limit], param_fn)?
-            .collect::<Result<Vec<_>, _>>()?
-    };
+
+    let sql = format!("SELECT * FROM sessions {where_sql} ORDER BY start_time DESC LIMIT ?");
+    params.push(Box::new(limit));
+
+    let mut stmt = conn.prepare(&sql)?;
+    let param_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
+    let rows = stmt
+        .query_map(param_refs.as_slice(), |row| {
+            Ok(SearchResult {
+                session_id: row.get("session_id")?,
+                source: row.get::<_, String>("source").unwrap_or_default(),
+                cwd: row.get::<_, String>("cwd").unwrap_or_default(),
+                slug: row.get::<_, String>("slug").unwrap_or_default(),
+                git_branches: row.get::<_, String>("git_branches").unwrap_or_default(),
+                start_time: row.get::<_, String>("start_time").unwrap_or_default(),
+                end_time: row.get::<_, String>("end_time").unwrap_or_default(),
+                files_touched: row.get::<_, String>("files_touched").unwrap_or_default(),
+                tools_used: row.get::<_, String>("tools_used").unwrap_or_default(),
+                message_count: row.get::<_, i64>("message_count").unwrap_or_default(),
+                first_message: row.get::<_, String>("first_message").unwrap_or_default(),
+                summary: row.get::<_, String>("summary").unwrap_or_default(),
+                content_hash: row
+                    .get::<_, Option<String>>("content_hash")
+                    .unwrap_or_default(),
+                custom_title: row
+                    .get::<_, Option<String>>("custom_title")
+                    .unwrap_or_default(),
+                metadata: row.get::<_, Option<String>>("metadata").unwrap_or_default(),
+                rank: 0.0,
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
     Ok(rows)
 }
 
@@ -482,7 +541,7 @@ mod tests {
         };
         upsert_session(&conn, &sess, 1234.0).unwrap();
 
-        let results = search(&conn, "LaunchDarkly", None, None, None, None, 10).unwrap();
+        let results = search(&conn, "LaunchDarkly", None, None, None, None, None, 10).unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].session_id, "test-123");
     }
@@ -578,7 +637,7 @@ mod tests {
         upsert_session(&conn, &body_sess, 1.0).unwrap();
         upsert_session(&conn, &title_sess, 2.0).unwrap();
 
-        let results = search(&conn, "session", None, None, None, None, 10).unwrap();
+        let results = search(&conn, "session", None, None, None, None, None, 10).unwrap();
         assert_eq!(results.len(), 2);
         // Title match should rank first (lower bm25 score = better)
         assert_eq!(results[0].session_id, "title-1");
@@ -597,12 +656,12 @@ mod tests {
         upsert_session(&conn, &sess, 1.0).unwrap();
 
         // Prefix query should match
-        let results = search(&conn, "sess*", None, None, None, None, 10).unwrap();
+        let results = search(&conn, "sess*", None, None, None, None, None, 10).unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].session_id, "prefix-1");
 
         // Partial without * should not match
-        let results = search(&conn, "sess", None, None, None, None, 10).unwrap();
+        let results = search(&conn, "sess", None, None, None, None, None, 10).unwrap();
         assert_eq!(results.len(), 0);
     }
 
@@ -621,12 +680,46 @@ mod tests {
         upsert_session(&conn, &sess, 1.0).unwrap();
 
         // Should find with matching project filter
-        let results = search(&conn, "rust", None, None, Some("myapp"), None, 10).unwrap();
+        let results = search(&conn, "rust", None, None, Some("myapp"), None, None, 10).unwrap();
         assert_eq!(results.len(), 1);
 
         // Should not find with non-matching project filter
-        let results = search(&conn, "rust", None, None, Some("other"), None, 10).unwrap();
+        let results = search(&conn, "rust", None, None, Some("other"), None, None, 10).unwrap();
         assert_eq!(results.len(), 0);
+    }
+
+    #[test]
+    fn test_search_project_filter_exact_path() {
+        let conn = test_db();
+        let sess1 = Session {
+            session_id: "proj-exact-1".into(),
+            source: "claude-code".into(),
+            cwd: "/home/user/gamma".into(),
+            body: "working on gamma".into(),
+            ..Default::default()
+        };
+        let sess2 = Session {
+            session_id: "proj-exact-2".into(),
+            source: "claude-code".into(),
+            cwd: "/home/user/gamma/.worktrees/prettier".into(),
+            body: "working on gamma worktree".into(),
+            ..Default::default()
+        };
+        upsert_session(&conn, &sess1, 1.0).unwrap();
+        upsert_session(&conn, &sess2, 1.0).unwrap();
+
+        // Exact path: only the exact cwd match
+        let results = search(&conn, "gamma", None, None, Some("/home/user/gamma"), None, None, 10).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].session_id, "proj-exact-1");
+
+        // Wildcard path: matches children too
+        let results = search(&conn, "gamma", None, None, Some("/home/user/gamma*"), None, None, 10).unwrap();
+        assert_eq!(results.len(), 2);
+
+        // Plain name: substring match (both contain "gamma")
+        let results = search(&conn, "gamma", None, None, Some("gamma"), None, None, 10).unwrap();
+        assert_eq!(results.len(), 2);
     }
 
     #[test]
@@ -648,16 +741,16 @@ mod tests {
         upsert_session(&conn, &codex_sess, 1.0).unwrap();
 
         // No filter: both
-        let results = search(&conn, "feature", None, None, None, None, 10).unwrap();
+        let results = search(&conn, "feature", None, None, None, None, None, 10).unwrap();
         assert_eq!(results.len(), 2);
 
         // Filter claude-code
-        let results = search(&conn, "feature", None, None, None, Some("claude-code"), 10).unwrap();
+        let results = search(&conn, "feature", None, None, None, Some("claude-code"), None, 10).unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].source, "claude-code");
 
         // Filter codex
-        let results = search(&conn, "feature", None, None, None, Some("codex"), 10).unwrap();
+        let results = search(&conn, "feature", None, None, None, Some("codex"), None, 10).unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].source, "codex");
     }

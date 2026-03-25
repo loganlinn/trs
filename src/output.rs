@@ -1,11 +1,10 @@
-use std::collections::HashSet;
 use std::io::Write;
 
 use crossterm::style::{Attribute, Color, ResetColor, SetAttribute, SetForegroundColor};
 use regex::Regex;
 
-use crate::search;
-use crate::session::{App, Message, MessageRole, SearchResult};
+use crate::display::{MessageSnippet, ResultDisplay, ResultGroup};
+use crate::session::{App, MessageRole};
 
 const GROUP_SEP: &str = "--";
 
@@ -16,142 +15,6 @@ fn role_color(role: &MessageRole) -> Color {
         MessageRole::Assistant => Color::Blue,
         MessageRole::Summary => Color::Yellow,
         MessageRole::Teammate => Color::Cyan,
-    }
-}
-
-/// Format duration between two ISO timestamps.
-fn duration(start: &str, end: &str) -> String {
-    if start.is_empty() || end.is_empty() {
-        return String::new();
-    }
-    let parse = |s: &str| -> Option<chrono::NaiveDateTime> {
-        chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S%.fZ").ok()
-    };
-    let (t0, t1) = match (parse(start), parse(end)) {
-        (Some(a), Some(b)) => (a, b),
-        _ => return String::new(),
-    };
-    let secs = (t1 - t0).num_seconds();
-    if secs < 0 {
-        return String::new();
-    }
-    if secs < 60 {
-        return format!("{secs}s");
-    }
-    let mins = secs / 60;
-    if mins < 60 {
-        return format!("{mins}m");
-    }
-    format!("{}h {}m", mins / 60, mins % 60)
-}
-
-/// Extract short date (YYYY-MM-DD) from ISO timestamp.
-fn short_date(ts: &str) -> &str {
-    if ts.len() >= 10 {
-        &ts[..10]
-    } else {
-        ""
-    }
-}
-
-/// Print session header (ripgrep-style filename line).
-pub fn print_session_header(
-    w: &mut dyn Write,
-    row: &SearchResult,
-    color: bool,
-) -> std::io::Result<()> {
-    let branches: Vec<String> = serde_json::from_str(&row.git_branches).unwrap_or_default();
-    let date = short_date(&row.start_time);
-    let dur = duration(&row.start_time, &row.end_time);
-
-    // Primary: cwd or session_id
-    let primary = if !row.cwd.is_empty() {
-        &row.cwd
-    } else {
-        &row.session_id
-    };
-
-    if color {
-        write!(
-            w,
-            "{}{}{}{}",
-            SetForegroundColor(Color::Magenta),
-            SetAttribute(Attribute::Bold),
-            primary,
-            SetAttribute(Attribute::Reset),
-        )?;
-    } else {
-        write!(w, "{primary}")?;
-    }
-
-    // Session name (from --name or /rename)
-    if let Some(title) = &row.custom_title {
-        if color {
-            write!(
-                w,
-                "  {}{}({title}){}",
-                SetForegroundColor(Color::Cyan),
-                SetAttribute(Attribute::Bold),
-                SetAttribute(Attribute::Reset),
-            )?;
-        } else {
-            write!(w, "  ({title})")?;
-        }
-    }
-
-    // Metadata
-    let mut meta_parts = Vec::new();
-    if !branches.is_empty() {
-        meta_parts.push(format!("@ {}", branches.join(", ")));
-    }
-    if !date.is_empty() {
-        meta_parts.push(date.to_string());
-    }
-    if !dur.is_empty() {
-        meta_parts.push(dur);
-    }
-    if row.message_count > 0 {
-        meta_parts.push(format!("{} msgs", row.message_count));
-    }
-
-    if !meta_parts.is_empty() {
-        if color {
-            write!(
-                w,
-                "  {}{}{}",
-                SetAttribute(Attribute::Dim),
-                meta_parts.join("  "),
-                SetAttribute(Attribute::Reset),
-            )?;
-        } else {
-            write!(w, "  {}", meta_parts.join("  "))?;
-        }
-    }
-    writeln!(w)?;
-    write!(w, "{}", ResetColor)?;
-    Ok(())
-}
-
-/// Print session footer (resume command).
-pub fn print_session_footer(
-    w: &mut dyn Write,
-    row: &SearchResult,
-    color: bool,
-) -> std::io::Result<()> {
-    let cmd = match App::parse(&row.source) {
-        Some(app) => app.resume_cmd(&row.session_id),
-        None => format!("{}  {}", row.source, row.session_id),
-    };
-    if color {
-        writeln!(
-            w,
-            "{}{}{}",
-            SetAttribute(Attribute::Dim),
-            cmd,
-            SetAttribute(Attribute::Reset),
-        )
-    } else {
-        writeln!(w, "{cmd}")
     }
 }
 
@@ -181,229 +44,329 @@ pub fn write_highlighted(w: &mut dyn Write, text: &str, terms: &[String]) -> std
     Ok(())
 }
 
-/// Display matching messages with context (ripgrep-style).
-pub fn display_conversation(
+// ---------------------------------------------------------------------------
+// Group / Result rendering from display model
+// ---------------------------------------------------------------------------
+
+/// Print a result group (one or more sessions sharing a project).
+pub fn print_group(
     w: &mut dyn Write,
-    messages: &[Message],
+    group: &ResultGroup,
     terms: &[String],
-    before: usize,
-    after: usize,
     color: bool,
 ) -> std::io::Result<()> {
-    // Find matching message indices
-    let match_indices: HashSet<usize> = messages
-        .iter()
-        .filter(|m| search::message_matches(m, terms))
-        .map(|m| m.index)
-        .collect();
+    let single = group.results.len() == 1;
 
-    if match_indices.is_empty() {
-        // Show first message as fallback
-        if let Some(msg) = messages.first() {
-            format_message_line(w, msg, terms, false, color)?;
-            writeln!(w)?;
-        }
-        return Ok(());
-    }
-
-    // Build set of indices to show (matches + context)
-    let valid: HashSet<usize> = messages.iter().map(|m| m.index).collect();
-    let mut show_indices: HashSet<usize> = HashSet::new();
-    for &mi in &match_indices {
-        let start = mi.saturating_sub(before);
-        for idx in start..=mi + after {
-            if valid.contains(&idx) {
-                show_indices.insert(idx);
-            }
-        }
-    }
-
-    let mut sorted_show: Vec<usize> = show_indices.into_iter().collect();
-    sorted_show.sort();
-
-    let mut prev_idx: Option<usize> = None;
-    for &idx in &sorted_show {
-        if let Some(prev) = prev_idx {
-            if idx > prev + 1 {
-                if color {
-                    writeln!(
-                        w,
-                        "{}{}{}",
-                        SetAttribute(Attribute::Dim),
-                        GROUP_SEP,
-                        SetAttribute(Attribute::Reset),
-                    )?;
-                } else {
-                    writeln!(w, "{GROUP_SEP}")?;
-                }
-            }
-        }
-        let msg = match messages.iter().find(|m| m.index == idx) {
-            Some(m) => m,
-            None => continue,
-        };
-        let is_match = match_indices.contains(&idx);
-        format_message_line(w, msg, terms, is_match, color)?;
-        writeln!(w)?;
-        prev_idx = Some(idx);
-    }
-
-    Ok(())
-}
-
-const MAX_DISPLAY_LINES: usize = 6;
-
-/// Format a single message line, ripgrep-style.
-fn format_message_line(
-    w: &mut dyn Write,
-    msg: &Message,
-    terms: &[String],
-    is_match: bool,
-    color: bool,
-) -> std::io::Result<()> {
-    let num_width = 4;
-    let sep = if is_match { ":" } else { "-" };
-
-    // Role label
-    let role_label = match msg.role {
-        MessageRole::Teammate => {
-            if msg.teammate_id.is_empty() {
-                "claude[teammate]".to_string()
-            } else {
-                format!("claude[{}]", msg.teammate_id)
-            }
-        }
-        MessageRole::Assistant => "claude".to_string(),
-        _ => msg.role.as_str().to_string(),
-    };
-
-    let rc = role_color(&msg.role);
-
-    // Line number
-    if color {
-        if is_match {
-            write!(
-                w,
-                "{}{}",
-                SetForegroundColor(Color::Green),
-                SetAttribute(Attribute::Dim),
-            )?;
-        } else {
-            write!(w, "{}", SetAttribute(Attribute::Dim))?;
-        }
-        write!(w, "{:>width$}", msg.index + 1, width = num_width)?;
-        write!(w, "{}", SetAttribute(Attribute::Reset))?;
-    } else {
-        write!(w, "{:>width$}", msg.index + 1, width = num_width)?;
-    }
-
-    // Separator
-    if color {
-        if is_match {
-            write!(
-                w,
-                "{}{sep}{}",
-                SetAttribute(Attribute::Bold),
-                SetAttribute(Attribute::Reset)
-            )?;
-        } else {
-            write!(
-                w,
-                "{}{sep}{}",
-                SetAttribute(Attribute::Dim),
-                SetAttribute(Attribute::Reset)
-            )?;
-        }
-    } else {
-        write!(w, "{sep}")?;
-    }
-
-    // Role
-    if color {
-        if is_match {
-            write!(
-                w,
-                "{}{}{}{}",
-                SetForegroundColor(rc),
-                SetAttribute(Attribute::Bold),
-                role_label,
-                SetAttribute(Attribute::Reset),
-            )?;
-        } else {
-            write!(
-                w,
-                "{}{}{}{}",
-                SetForegroundColor(rc),
-                SetAttribute(Attribute::Dim),
-                role_label,
-                SetAttribute(Attribute::Reset),
-            )?;
-        }
-    } else {
-        write!(w, "{role_label}")?;
-    }
-
-    // Separator again
-    if color {
-        if is_match {
-            write!(
-                w,
-                "{}{sep}{}",
-                SetAttribute(Attribute::Bold),
-                SetAttribute(Attribute::Reset)
-            )?;
-        } else {
-            write!(
-                w,
-                "{}{sep}{}",
-                SetAttribute(Attribute::Dim),
-                SetAttribute(Attribute::Reset)
-            )?;
-        }
-    } else {
-        write!(w, "{sep}")?;
-    }
-
-    // Teammate context: show summary only when not a match
-    if msg.role == MessageRole::Teammate && !is_match && !msg.teammate_summary.is_empty() {
+    if !single {
+        // Group header
         if color {
             write!(
                 w,
-                " {}{}{}",
-                SetAttribute(Attribute::Dim),
-                msg.teammate_summary,
+                "{}{}{}{}",
+                SetForegroundColor(Color::Magenta),
+                SetAttribute(Attribute::Bold),
+                group.project_name,
                 SetAttribute(Attribute::Reset),
             )?;
         } else {
-            write!(w, " {}", msg.teammate_summary)?;
+            write!(w, "{}", group.project_name)?;
         }
-        return Ok(());
+        if !group.branches.is_empty() {
+            let branch_str = format!("  @{}", group.branches.join(","));
+            if color {
+                write!(
+                    w,
+                    "{}{}{}",
+                    SetAttribute(Attribute::Dim),
+                    branch_str,
+                    SetAttribute(Attribute::Reset),
+                )?;
+            } else {
+                write!(w, "{branch_str}")?;
+            }
+        }
+        writeln!(w)?;
     }
 
-    // Message text (truncated)
-    let text = msg.text.trim();
-    let text_lines: Vec<&str> = text.lines().collect();
-    let display_text = if text_lines.len() > MAX_DISPLAY_LINES {
-        let truncated: Vec<&str> = text_lines[..MAX_DISPLAY_LINES].to_vec();
-        let remaining = text_lines.len() - MAX_DISPLAY_LINES;
-        format!("{}\n  ... (+{remaining} lines)", truncated.join("\n"))
-    } else {
-        text_lines.join("\n")
-    };
+    for (i, result) in group.results.iter().enumerate() {
+        let prefix = if single { "" } else { "  " };
+        print_result(w, result, terms, color, prefix)?;
+        if i + 1 < group.results.len() {
+            writeln!(w)?;
+        }
+    }
+    Ok(())
+}
 
-    if is_match && !terms.is_empty() && color {
-        write!(w, " ")?;
-        write_highlighted(w, &display_text, terms)?;
-    } else if color && !is_match {
+/// Print a single result with its header, snippets, and footer.
+fn print_result(
+    w: &mut dyn Write,
+    result: &ResultDisplay,
+    terms: &[String],
+    color: bool,
+    prefix: &str,
+) -> std::io::Result<()> {
+    // Header line
+    write!(w, "{prefix}")?;
+    print_result_header(w, result, color)?;
+
+    // Snippets
+    if !result.snippets.is_empty() {
+        let mut prev_idx: Option<usize> = None;
+        for snippet in &result.snippets {
+            if let Some(prev) = prev_idx {
+                if snippet.index > prev + 1 {
+                    if color {
+                        writeln!(
+                            w,
+                            "{prefix}{}{}{}",
+                            SetAttribute(Attribute::Dim),
+                            GROUP_SEP,
+                            SetAttribute(Attribute::Reset),
+                        )?;
+                    } else {
+                        writeln!(w, "{prefix}{GROUP_SEP}")?;
+                    }
+                }
+            }
+            write!(w, "{prefix}")?;
+            print_snippet(w, snippet, terms, color)?;
+            writeln!(w)?;
+            prev_idx = Some(snippet.index);
+        }
+    } else {
+        // Fallback: show first_message/summary
+        let desc = if !result.summary.is_empty() {
+            &result.summary
+        } else {
+            &result.first_message
+        };
+        if !desc.is_empty() {
+            let desc = desc.replace('\n', " ");
+            let desc = desc.trim().to_string();
+            let desc = if desc.len() > 200 {
+                format!("{}...", &desc[..197])
+            } else {
+                desc
+            };
+            if color && !terms.is_empty() {
+                write!(w, "{prefix}     ")?;
+                write_highlighted(w, &desc, terms)?;
+                writeln!(w)?;
+            } else {
+                writeln!(w, "{prefix}     {desc}")?;
+            }
+        }
+    }
+
+    // Footer
+    write!(w, "{prefix}")?;
+    print_result_footer(w, result, color)?;
+    writeln!(w)?;
+    Ok(())
+}
+
+/// Print result header from ResultDisplay.
+fn print_result_header(
+    w: &mut dyn Write,
+    result: &ResultDisplay,
+    color: bool,
+) -> std::io::Result<()> {
+    let has_title = result
+        .custom_title
+        .as_deref()
+        .is_some_and(|t| !t.is_empty());
+
+    if color {
         write!(
             w,
-            " {}{}{}",
-            SetAttribute(Attribute::Dim),
-            display_text,
+            "{}{}{}{}",
+            SetForegroundColor(Color::Magenta),
+            SetAttribute(Attribute::Bold),
+            result.project_name,
             SetAttribute(Attribute::Reset),
         )?;
     } else {
-        write!(w, " {display_text}")?;
+        write!(w, "{}", result.project_name)?;
+    }
+
+    // Metadata
+    let mut meta_parts = Vec::new();
+    if !result.branches.is_empty() {
+        meta_parts.push(format!("@{}", result.branches.join(",")));
+    }
+    if !result.date.is_empty() {
+        meta_parts.push(result.date.clone());
+    }
+    if !result.duration.is_empty() {
+        meta_parts.push(result.duration.clone());
+    }
+    if result.message_count > 0 {
+        meta_parts.push(format!("{} msgs", result.message_count));
+    }
+
+    if !meta_parts.is_empty() {
+        if color {
+            write!(
+                w,
+                "  {}{}{}",
+                SetAttribute(Attribute::Dim),
+                meta_parts.join("  "),
+                SetAttribute(Attribute::Reset),
+            )?;
+        } else {
+            write!(w, "  {}", meta_parts.join("  "))?;
+        }
+    }
+
+    // Append custom title after metadata
+    if has_title {
+        let title = result.custom_title.as_deref().unwrap();
+        if color {
+            write!(
+                w,
+                "  {}{}{}",
+                SetForegroundColor(Color::Cyan),
+                title,
+                SetAttribute(Attribute::Reset),
+            )?;
+        } else {
+            write!(w, "  {}", title)?;
+        }
+    }
+
+    writeln!(w)?;
+    write!(w, "{}", ResetColor)?;
+    Ok(())
+}
+
+/// Print result footer (resume command).
+fn print_result_footer(
+    w: &mut dyn Write,
+    result: &ResultDisplay,
+    color: bool,
+) -> std::io::Result<()> {
+    let cmd = match App::parse(&result.source) {
+        Some(app) => app.resume_cmd(&result.session_id),
+        None => format!("{}  {}", result.source, result.session_id),
+    };
+    if color {
+        writeln!(
+            w,
+            "{}{}{}",
+            SetAttribute(Attribute::Dim),
+            cmd,
+            SetAttribute(Attribute::Reset),
+        )
+    } else {
+        writeln!(w, "{cmd}")
+    }
+}
+
+/// Print a message snippet line.
+fn print_snippet(
+    w: &mut dyn Write,
+    snippet: &MessageSnippet,
+    terms: &[String],
+    color: bool,
+) -> std::io::Result<()> {
+    let num_width = 4;
+    let rc = role_color(&snippet.role);
+
+    // Line number (right-aligned, dim)
+    if color {
+        write!(
+            w,
+            "{}{:>width$}{}",
+            SetAttribute(Attribute::Dim),
+            snippet.index + 1,
+            SetAttribute(Attribute::Reset),
+            width = num_width,
+        )?;
+    } else {
+        write!(w, "{:>width$}", snippet.index + 1, width = num_width)?;
+    }
+
+    // Marker + role label
+    let attr = if snippet.is_match {
+        Attribute::Bold
+    } else {
+        Attribute::Dim
+    };
+    if color {
+        write!(
+            w,
+            " {}{}{}{} {}{}{}{}",
+            SetForegroundColor(rc),
+            SetAttribute(attr),
+            snippet.marker,
+            SetAttribute(Attribute::Reset),
+            SetForegroundColor(rc),
+            SetAttribute(attr),
+            snippet.label,
+            SetAttribute(Attribute::Reset),
+        )?;
+    } else {
+        write!(w, " {} {}", snippet.marker, snippet.label)?;
+    }
+
+    // Snippet lines
+    let prefix_width = num_width + 1 + 1 + 1 + snippet.label.len() + 1;
+    let indent = " ".repeat(prefix_width);
+
+    for (i, line) in snippet.lines.iter().enumerate() {
+        if line.is_gap {
+            if i > 0 {
+                writeln!(w)?;
+            }
+            if color {
+                write!(
+                    w,
+                    "{}{}{}{}",
+                    indent,
+                    SetAttribute(Attribute::Dim),
+                    line.text,
+                    SetAttribute(Attribute::Reset),
+                )?;
+            } else {
+                write!(w, "{}{}", indent, line.text)?;
+            }
+            continue;
+        }
+
+        if i == 0 {
+            if snippet.is_match && !terms.is_empty() && color {
+                write!(w, " ")?;
+                write_highlighted(w, &line.text, terms)?;
+            } else if color && !snippet.is_match {
+                write!(
+                    w,
+                    " {}{}{}",
+                    SetAttribute(Attribute::Dim),
+                    line.text,
+                    SetAttribute(Attribute::Reset),
+                )?;
+            } else {
+                write!(w, " {}", line.text)?;
+            }
+        } else {
+            writeln!(w)?;
+            if snippet.is_match && !terms.is_empty() && color {
+                write!(w, "{indent}")?;
+                write_highlighted(w, &line.text, terms)?;
+            } else if color && !snippet.is_match {
+                write!(
+                    w,
+                    "{}{}{}{}",
+                    indent,
+                    SetAttribute(Attribute::Dim),
+                    line.text,
+                    SetAttribute(Attribute::Reset),
+                )?;
+            } else {
+                write!(w, "{}{}", indent, line.text)?;
+            }
+        }
     }
 
     Ok(())
@@ -412,42 +375,7 @@ fn format_message_line(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_duration_seconds() {
-        assert_eq!(
-            duration("2024-01-01T00:00:00.000Z", "2024-01-01T00:00:30.000Z"),
-            "30s"
-        );
-    }
-
-    #[test]
-    fn test_duration_minutes() {
-        assert_eq!(
-            duration("2024-01-01T00:00:00.000Z", "2024-01-01T00:05:00.000Z"),
-            "5m"
-        );
-    }
-
-    #[test]
-    fn test_duration_hours() {
-        assert_eq!(
-            duration("2024-01-01T00:00:00.000Z", "2024-01-01T02:30:00.000Z"),
-            "2h 30m"
-        );
-    }
-
-    #[test]
-    fn test_duration_empty() {
-        assert_eq!(duration("", "2024-01-01T00:00:00.000Z"), "");
-        assert_eq!(duration("2024-01-01T00:00:00.000Z", ""), "");
-    }
-
-    #[test]
-    fn test_short_date() {
-        assert_eq!(short_date("2024-01-15T00:00:00.000Z"), "2024-01-15");
-        assert_eq!(short_date(""), "");
-    }
+    use crate::display::SnippetLine;
 
     #[test]
     fn test_write_highlighted() {
@@ -458,31 +386,133 @@ mod tests {
     }
 
     #[test]
-    fn test_print_session_header_no_color() {
-        let row = SearchResult {
+    fn test_print_result_header_no_color() {
+        let result = ResultDisplay {
+            project_name: "project".into(),
+            full_path: "/tmp/project".into(),
+            branches: vec![],
+            date: "2024-01-01".into(),
+            duration: "5m".into(),
+            message_count: 10,
             session_id: "s1".into(),
             source: "claude-code".into(),
-            cwd: "/tmp/project".into(),
-            slug: String::new(),
-            git_branches: "[]".into(),
-            start_time: "2024-01-01T00:00:00.000Z".into(),
-            end_time: "2024-01-01T00:05:00.000Z".into(),
-            files_touched: "[]".into(),
-            tools_used: "[]".into(),
-            message_count: 10,
             first_message: String::new(),
             summary: String::new(),
-            content_hash: None,
             custom_title: None,
-            metadata: None,
-            rank: 0.0,
+            snippets: vec![],
         };
         let mut buf = Vec::new();
-        print_session_header(&mut buf, &row, false).unwrap();
+        print_result_header(&mut buf, &result, false).unwrap();
         let s = String::from_utf8(buf).unwrap();
-        assert!(s.contains("/tmp/project"));
+        assert!(s.starts_with("project"));
         assert!(s.contains("2024-01-01"));
         assert!(s.contains("5m"));
         assert!(s.contains("10 msgs"));
+    }
+
+    #[test]
+    fn test_print_result_header_custom_title() {
+        let result = ResultDisplay {
+            project_name: "trs".into(),
+            full_path: "/Users/logan/src/trs".into(),
+            branches: vec!["main".into()],
+            date: "2024-01-01".into(),
+            duration: "5m".into(),
+            message_count: 32,
+            session_id: "s1".into(),
+            source: "claude-code".into(),
+            first_message: String::new(),
+            summary: String::new(),
+            custom_title: Some("tui-search-perf".into()),
+            snippets: vec![],
+        };
+        let mut buf = Vec::new();
+        print_result_header(&mut buf, &result, false).unwrap();
+        let s = String::from_utf8(buf).unwrap();
+        assert!(s.starts_with("trs"), "should start with project slug: {s}");
+        assert!(s.contains("tui-search-perf"), "should contain custom title: {s}");
+        assert!(s.contains("@main"));
+    }
+
+    #[test]
+    fn test_print_snippet_match() {
+        let snippet = MessageSnippet {
+            index: 0,
+            role: MessageRole::User,
+            marker: "❯",
+            label: "user".into(),
+            is_match: true,
+            lines: vec![SnippetLine {
+                text: "help me with search".into(),
+                is_gap: false,
+                highlights: vec![(13, 19)],
+            }],
+            teammate_summary: String::new(),
+        };
+        let mut buf = Vec::new();
+        print_snippet(&mut buf, &snippet, &["search".into()], false).unwrap();
+        let s = String::from_utf8(buf).unwrap();
+        assert!(s.contains("❯"));
+        assert!(s.contains("user"));
+        assert!(s.contains("help me with search"));
+    }
+
+    #[test]
+    fn test_print_group_single() {
+        let result = ResultDisplay {
+            project_name: "trs".into(),
+            full_path: "/tmp/trs".into(),
+            branches: vec![],
+            date: "2024-01-01".into(),
+            duration: "5m".into(),
+            message_count: 10,
+            session_id: "s1".into(),
+            source: "claude-code".into(),
+            first_message: "hello".into(),
+            summary: String::new(),
+            custom_title: None,
+            snippets: vec![],
+        };
+        let group = ResultGroup {
+            project_name: "trs".into(),
+            full_path: "/tmp/trs".into(),
+            branches: vec![],
+            results: vec![result],
+        };
+        let mut buf = Vec::new();
+        print_group(&mut buf, &group, &[], false).unwrap();
+        let s = String::from_utf8(buf).unwrap();
+        // Single result: no group header prefix
+        assert!(s.starts_with("trs"));
+    }
+
+    #[test]
+    fn test_print_group_multiple() {
+        let mk = |id: &str| ResultDisplay {
+            project_name: "trs".into(),
+            full_path: "/tmp/trs".into(),
+            branches: vec![],
+            date: "2024-01-01".into(),
+            duration: "5m".into(),
+            message_count: 10,
+            session_id: id.into(),
+            source: "claude-code".into(),
+            first_message: "hello".into(),
+            summary: String::new(),
+            custom_title: None,
+            snippets: vec![],
+        };
+        let group = ResultGroup {
+            project_name: "trs".into(),
+            full_path: "/tmp/trs".into(),
+            branches: vec!["main".into()],
+            results: vec![mk("s1"), mk("s2")],
+        };
+        let mut buf = Vec::new();
+        print_group(&mut buf, &group, &[], false).unwrap();
+        let s = String::from_utf8(buf).unwrap();
+        // Multi result: group header first, then indented results
+        assert!(s.starts_with("trs"));
+        assert!(s.contains("  trs")); // indented child
     }
 }

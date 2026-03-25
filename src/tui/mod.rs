@@ -42,7 +42,7 @@ fn restore_terminal(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Re
 }
 
 /// Run the interactive TUI search interface.
-pub fn run() -> Result<Option<ExitAction>> {
+pub fn run(initial_input: &str) -> Result<Option<ExitAction>> {
     let db_path = config::default_db_path();
 
     // Auto-index before launching TUI
@@ -53,7 +53,7 @@ pub fn run() -> Result<Option<ExitAction>> {
 
     let conn = db::open_db(&db_path, true)?;
     let mut terminal = init_terminal()?;
-    let mut app = App::new(conn);
+    let mut app = App::new(conn, initial_input);
 
     let result = run_loop(&mut terminal, &mut app);
 
@@ -104,7 +104,7 @@ mod tests {
     fn test_app() -> App {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         conn.execute_batch(crate::db::SCHEMA).unwrap();
-        App::new(conn)
+        App::new(conn, "")
     }
 
     #[test]
@@ -169,7 +169,7 @@ mod tests {
     #[test]
     fn test_help_toggle() {
         let mut app = test_app();
-        let msg = app.handle_key(key(KeyCode::Char('?')));
+        let msg = app.handle_key(key_ctrl(KeyCode::Char('/')));
         assert!(matches!(msg, Some(Message::ToggleHelp)));
         if let Some(m) = msg {
             app.update(m);
