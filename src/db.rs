@@ -234,42 +234,34 @@ pub fn search(
     let where_sql = if where_clauses.is_empty() {
         String::new()
     } else {
-        format!("WHERE {}", where_clauses.join(" AND "))
+        format!("AND {}", where_clauses.join(" AND "))
     };
 
     params.push(Box::new(limit));
 
-    // Two-tier ranking: metadata matches always rank above body-only matches.
-    // FTS columns: cwd(1), custom_title(2), git_branches(3), summary(4),
-    //              first_message(5), files_touched(6), body(7)
-    // bm25 weights within each tier: title 20x, cwd/summary 10x, branches/first_message 5x, files 3x, body 1x.
-    // The -1e6 offset guarantees metadata-matching sessions sort before body-only ones.
+    // Query 1: collect metadata-matching session IDs (fast, separate query).
+    // If the column-filtered FTS syntax fails, fall back to empty set.
     let meta_query = format!(
         "{{cwd custom_title git_branches summary first_message files_touched}} : ({query})"
     );
-    params.insert(1, Box::new(meta_query));
+    let meta_ids: std::collections::HashSet<String> = conn
+        .prepare("SELECT session_id FROM sessions_fts WHERE sessions_fts MATCH ?1")
+        .and_then(|mut stmt| {
+            stmt.query_map([&meta_query], |row| row.get::<_, String>(0))?
+                .collect::<Result<std::collections::HashSet<_>, _>>()
+        })
+        .unwrap_or_default();
 
+    // Query 2: all matches with bm25 ranking + session data.
+    // Two-tier ranking: metadata matches get -1e6 offset applied in Rust after fetch.
+    // FTS columns: cwd(1), custom_title(2), git_branches(3), summary(4),
+    //              first_message(5), files_touched(6), body(7)
+    // bm25 weights: title 20x, cwd/summary 10x, branches/first_message 5x, files 3x, body 1x.
     let sql = format!(
-        "WITH
-            all_matches AS (
-                SELECT session_id,
-                    bm25(sessions_fts, 10.0, 20.0, 5.0, 10.0, 5.0, 3.0, 1.0) AS score
-                FROM sessions_fts
-                WHERE sessions_fts MATCH ?1
-            ),
-            meta_matches AS (
-                SELECT session_id
-                FROM sessions_fts
-                WHERE sessions_fts MATCH ?2
-            )
-        SELECT s.*,
-            CASE WHEN m.session_id IS NOT NULL
-                THEN a.score - 1e6
-                ELSE a.score
-            END AS rank
-        FROM all_matches a
-        LEFT JOIN meta_matches m USING (session_id)
-        JOIN sessions s ON s.session_id = a.session_id
+        "SELECT s.*, bm25(sessions_fts, 10.0, 20.0, 5.0, 10.0, 5.0, 3.0, 1.0) AS rank
+        FROM sessions_fts
+        JOIN sessions s ON s.session_id = sessions_fts.session_id
+        WHERE sessions_fts MATCH ?1
         {where_sql}
         ORDER BY rank
         LIMIT ?"
@@ -279,7 +271,7 @@ pub fn search(
     let param_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
 
     let mut stmt = conn.prepare(&sql)?;
-    let rows = stmt
+    let mut results: Vec<SearchResult> = stmt
         .query_map(param_refs.as_slice(), |row| {
             Ok(SearchResult {
                 session_id: row.get("session_id")?,
@@ -306,7 +298,15 @@ pub fn search(
         })?
         .collect::<Result<Vec<_>, _>>()?;
 
-    Ok(rows)
+    // Apply two-tier offset: metadata matches sort above body-only matches
+    for r in &mut results {
+        if meta_ids.contains(&r.session_id) {
+            r.rank -= 1e6;
+        }
+    }
+    results.sort_by(|a, b| a.rank.partial_cmp(&b.rank).unwrap());
+
+    Ok(results)
 }
 
 /// List recent sessions ordered by start_time descending.
@@ -416,9 +416,14 @@ pub fn delete_sessions(conn: &Connection, ids: &[String]) -> Result<()> {
 }
 
 /// Append `*` to the last token for FTS5 prefix matching (for as-you-type search).
+/// Only applies when the last token is >= 3 chars to avoid overly broad matches.
 pub fn prefix_query(query: &str) -> String {
     let trimmed = query.trim_end();
     if trimmed.is_empty() || trimmed.ends_with('*') || trimmed.ends_with('"') {
+        return query.to_string();
+    }
+    let last_token = trimmed.rsplit_once(' ').map(|(_, t)| t).unwrap_or(trimmed);
+    if last_token.len() < 3 {
         return query.to_string();
     }
     format!("{trimmed}*")
@@ -513,6 +518,14 @@ mod tests {
         assert_eq!(prefix_query("migrat*"), "migrat*");
         assert_eq!(prefix_query("\"exact phrase\""), "\"exact phrase\"");
         assert_eq!(prefix_query(""), "");
+        // Short last tokens should NOT get prefix wildcard
+        assert_eq!(prefix_query("a"), "a");
+        assert_eq!(prefix_query("ab"), "ab");
+        assert_eq!(prefix_query("hello a"), "hello a");
+        assert_eq!(prefix_query("hello ab"), "hello ab");
+        // 3+ chars should get wildcard
+        assert_eq!(prefix_query("abc"), "abc*");
+        assert_eq!(prefix_query("hello abc"), "hello abc*");
     }
 
     #[test]
