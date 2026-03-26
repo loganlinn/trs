@@ -119,6 +119,7 @@ echo "Released $tag"
 '''
 
 [tasks.release]
+depends = ["lint", "test"]
 description = "Bump version, tag, and push a release"
 usage = '''
 arg "[part]" help="Version part to bump" {

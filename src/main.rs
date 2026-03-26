@@ -65,14 +65,17 @@ fn run(cli: Cli) -> Result<i32> {
             let source_str = app_filter.map(|a| a.source_str().to_string());
             let project_pat = args.project_pat.as_deref().map(search::resolve_project_filter);
             let date_filter = args.date.as_deref().and_then(search::parse_date_filter);
+            let filter = db::SearchFilter {
+                file_pat: args.file_pat.as_deref(),
+                branch_pat: args.branch_pat.as_deref(),
+                project_pat: project_pat.as_deref(),
+                source: source_str.as_deref(),
+                date: date_filter.as_ref(),
+            };
             let found = search::run_search(
                 &query,
                 &db_path,
-                args.file_pat.as_deref(),
-                args.branch_pat.as_deref(),
-                project_pat.as_deref(),
-                source_str.as_deref(),
-                date_filter.as_ref(),
+                &filter,
                 args.limit,
                 ctx_before,
                 ctx_after,

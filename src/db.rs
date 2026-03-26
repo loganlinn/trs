@@ -5,6 +5,16 @@ use std::path::Path;
 use crate::search::DateFilter;
 use crate::session::{SearchResult, Session};
 
+/// Filter parameters shared by search and list queries.
+#[derive(Debug, Default)]
+pub struct SearchFilter<'a> {
+    pub file_pat: Option<&'a str>,
+    pub branch_pat: Option<&'a str>,
+    pub project_pat: Option<&'a str>,
+    pub source: Option<&'a str>,
+    pub date: Option<&'a DateFilter>,
+}
+
 /// Build a SQL clause and parameter for a filter value.
 ///
 /// - `value*` → prefix match: `column LIKE 'value%'`
@@ -221,36 +231,32 @@ pub fn upsert_session(conn: &Connection, sess: &Session, mtime: f64) -> Result<(
 pub fn search(
     conn: &Connection,
     query: &str,
-    file_pat: Option<&str>,
-    branch_pat: Option<&str>,
-    project_pat: Option<&str>,
-    source_filter: Option<&str>,
-    date_filter: Option<&DateFilter>,
+    filter: &SearchFilter,
     limit: i64,
 ) -> Result<Vec<SearchResult>> {
     let mut where_clauses = Vec::new();
     let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = vec![Box::new(query.to_string())];
 
-    if let Some(fp) = file_pat {
+    if let Some(fp) = filter.file_pat {
         let (clause, param) = filter_clause("s.files_touched", fp);
         where_clauses.push(clause);
         params.push(Box::new(param));
     }
-    if let Some(bp) = branch_pat {
+    if let Some(bp) = filter.branch_pat {
         let (clause, param) = filter_clause("s.git_branches", bp);
         where_clauses.push(clause);
         params.push(Box::new(param));
     }
-    if let Some(pp) = project_pat {
+    if let Some(pp) = filter.project_pat {
         let (clause, param) = filter_clause("s.cwd", pp);
         where_clauses.push(clause);
         params.push(Box::new(param));
     }
-    if let Some(src) = source_filter {
+    if let Some(src) = filter.source {
         where_clauses.push("s.source = ?".to_string());
         params.push(Box::new(src.to_string()));
     }
-    if let Some(df) = date_filter {
+    if let Some(df) = filter.date {
         where_clauses.push(format!("s.start_time {} ?", df.sql_op()));
         params.push(Box::new(df.sql_value()));
     }
@@ -337,35 +343,31 @@ pub fn search(
 pub fn list_recent(
     conn: &Connection,
     limit: i64,
-    file_pat: Option<&str>,
-    branch_pat: Option<&str>,
-    project_pat: Option<&str>,
-    source_filter: Option<&str>,
-    date_filter: Option<&DateFilter>,
+    filter: &SearchFilter,
 ) -> Result<Vec<SearchResult>> {
     let mut where_clauses = Vec::new();
     let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
 
-    if let Some(fp) = file_pat {
+    if let Some(fp) = filter.file_pat {
         let (clause, param) = filter_clause("files_touched", fp);
         where_clauses.push(clause);
         params.push(Box::new(param));
     }
-    if let Some(bp) = branch_pat {
+    if let Some(bp) = filter.branch_pat {
         let (clause, param) = filter_clause("git_branches", bp);
         where_clauses.push(clause);
         params.push(Box::new(param));
     }
-    if let Some(pp) = project_pat {
+    if let Some(pp) = filter.project_pat {
         let (clause, param) = filter_clause("cwd", pp);
         where_clauses.push(clause);
         params.push(Box::new(param));
     }
-    if let Some(src) = source_filter {
+    if let Some(src) = filter.source {
         where_clauses.push("source = ?".to_string());
         params.push(Box::new(src.to_string()));
     }
-    if let Some(df) = date_filter {
+    if let Some(df) = filter.date {
         where_clauses.push(format!("start_time {} ?", df.sql_op()));
         params.push(Box::new(df.sql_value()));
     }
@@ -541,7 +543,7 @@ mod tests {
         };
         upsert_session(&conn, &sess, 1234.0).unwrap();
 
-        let results = search(&conn, "LaunchDarkly", None, None, None, None, None, 10).unwrap();
+        let results = search(&conn, "LaunchDarkly", &SearchFilter::default(), 10).unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].session_id, "test-123");
     }
@@ -637,7 +639,7 @@ mod tests {
         upsert_session(&conn, &body_sess, 1.0).unwrap();
         upsert_session(&conn, &title_sess, 2.0).unwrap();
 
-        let results = search(&conn, "session", None, None, None, None, None, 10).unwrap();
+        let results = search(&conn, "session", &SearchFilter::default(), 10).unwrap();
         assert_eq!(results.len(), 2);
         // Title match should rank first (lower bm25 score = better)
         assert_eq!(results[0].session_id, "title-1");
@@ -656,12 +658,12 @@ mod tests {
         upsert_session(&conn, &sess, 1.0).unwrap();
 
         // Prefix query should match
-        let results = search(&conn, "sess*", None, None, None, None, None, 10).unwrap();
+        let results = search(&conn, "sess*", &SearchFilter::default(), 10).unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].session_id, "prefix-1");
 
         // Partial without * should not match
-        let results = search(&conn, "sess", None, None, None, None, None, 10).unwrap();
+        let results = search(&conn, "sess", &SearchFilter::default(), 10).unwrap();
         assert_eq!(results.len(), 0);
     }
 
@@ -680,11 +682,11 @@ mod tests {
         upsert_session(&conn, &sess, 1.0).unwrap();
 
         // Should find with matching project filter
-        let results = search(&conn, "rust", None, None, Some("myapp"), None, None, 10).unwrap();
+        let results = search(&conn, "rust", &SearchFilter { project_pat: Some("myapp"), ..Default::default() }, 10).unwrap();
         assert_eq!(results.len(), 1);
 
         // Should not find with non-matching project filter
-        let results = search(&conn, "rust", None, None, Some("other"), None, None, 10).unwrap();
+        let results = search(&conn, "rust", &SearchFilter { project_pat: Some("other"), ..Default::default() }, 10).unwrap();
         assert_eq!(results.len(), 0);
     }
 
@@ -709,16 +711,16 @@ mod tests {
         upsert_session(&conn, &sess2, 1.0).unwrap();
 
         // Exact path: only the exact cwd match
-        let results = search(&conn, "gamma", None, None, Some("/home/user/gamma"), None, None, 10).unwrap();
+        let results = search(&conn, "gamma", &SearchFilter { project_pat: Some("/home/user/gamma"), ..Default::default() }, 10).unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].session_id, "proj-exact-1");
 
         // Wildcard path: matches children too
-        let results = search(&conn, "gamma", None, None, Some("/home/user/gamma*"), None, None, 10).unwrap();
+        let results = search(&conn, "gamma", &SearchFilter { project_pat: Some("/home/user/gamma*"), ..Default::default() }, 10).unwrap();
         assert_eq!(results.len(), 2);
 
         // Plain name: substring match (both contain "gamma")
-        let results = search(&conn, "gamma", None, None, Some("gamma"), None, None, 10).unwrap();
+        let results = search(&conn, "gamma", &SearchFilter { project_pat: Some("gamma"), ..Default::default() }, 10).unwrap();
         assert_eq!(results.len(), 2);
     }
 
@@ -741,16 +743,16 @@ mod tests {
         upsert_session(&conn, &codex_sess, 1.0).unwrap();
 
         // No filter: both
-        let results = search(&conn, "feature", None, None, None, None, None, 10).unwrap();
+        let results = search(&conn, "feature", &SearchFilter::default(), 10).unwrap();
         assert_eq!(results.len(), 2);
 
         // Filter claude-code
-        let results = search(&conn, "feature", None, None, None, Some("claude-code"), None, 10).unwrap();
+        let results = search(&conn, "feature", &SearchFilter { source: Some("claude-code"), ..Default::default() }, 10).unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].source, "claude-code");
 
         // Filter codex
-        let results = search(&conn, "feature", None, None, None, Some("codex"), None, 10).unwrap();
+        let results = search(&conn, "feature", &SearchFilter { source: Some("codex"), ..Default::default() }, 10).unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].source, "codex");
     }

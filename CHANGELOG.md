@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### Changed
+
+- **`SearchFilter` struct**: Replaced positional filter arguments on `db::search()` and `db::list_recent()` with a `SearchFilter` struct, fixing `clippy::too_many_arguments`.
+- **`is_some_and` idiom**: Replaced `map_or(false, ...)` with `is_some_and(...)` in date filter parsing.
+- **Release task gates on lint + test**: `mise run release` now depends on `lint` and `test` tasks.
+
 ### Added
 
 - **Search term highlighting in results list**: Matched terms are now highlighted (bold red) in the cwd/path, custom title, metadata, and preview fields of each search result, making it clear why a result matched.

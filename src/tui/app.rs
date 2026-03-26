@@ -92,7 +92,7 @@ pub struct App {
 
 impl App {
     pub fn new(conn: Connection, initial_input: &str) -> Self {
-        let results = db::list_recent(&conn, 50, None, None, None, None, None).unwrap_or_default();
+        let results = db::list_recent(&conn, 50, &db::SearchFilter::default()).unwrap_or_default();
         let status_message = format!("{} session(s)", results.len());
         let mut app = Self {
             mode: Mode::Normal,
@@ -360,7 +360,7 @@ impl App {
     }
 
     fn load_recent(&mut self) {
-        self.results = db::list_recent(&self.conn, 50, None, None, None, None, None).unwrap_or_default();
+        self.results = db::list_recent(&self.conn, 50, &db::SearchFilter::default()).unwrap_or_default();
         self.status_message = format!("{} session(s)", self.results.len());
         self.selected = 0;
         self.scroll_offset = 0;
@@ -383,16 +383,14 @@ impl App {
 
         // If only filters and no text, list recent with filters
         if parsed.text.is_empty() {
-            let source = parsed.source_filter();
-            match db::list_recent(
-                &self.conn,
-                50,
-                parsed.file.as_deref(),
-                parsed.branch.as_deref(),
-                parsed.project.as_deref(),
-                source,
-                parsed.date.as_ref(),
-            ) {
+            let filter = db::SearchFilter {
+                file_pat: parsed.file.as_deref(),
+                branch_pat: parsed.branch.as_deref(),
+                project_pat: parsed.project.as_deref(),
+                source: parsed.source_filter(),
+                date: parsed.date.as_ref(),
+            };
+            match db::list_recent(&self.conn, 50, &filter) {
                 Ok(rows) => {
                     self.search_terms.clear();
                     self.status_message = format!("{} session(s)", rows.len());
@@ -409,17 +407,14 @@ impl App {
         }
 
         let normalized = db::prefix_query(&db::normalize_fts_query(&parsed.text));
-        let source = parsed.source_filter();
-        match db::search(
-            &self.conn,
-            &normalized,
-            parsed.file.as_deref(),
-            parsed.branch.as_deref(),
-            parsed.project.as_deref(),
-            source,
-            parsed.date.as_ref(),
-            50,
-        ) {
+        let filter = db::SearchFilter {
+            file_pat: parsed.file.as_deref(),
+            branch_pat: parsed.branch.as_deref(),
+            project_pat: parsed.project.as_deref(),
+            source: parsed.source_filter(),
+            date: parsed.date.as_ref(),
+        };
+        match db::search(&self.conn, &normalized, &filter, 50) {
             Ok(rows) => {
                 self.search_terms = search::query_terms(&parsed.text);
                 self.status_message = format!("{} result(s)", rows.len());

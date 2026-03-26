@@ -125,7 +125,7 @@ pub fn resolve_date_value(value: &str) -> Option<String> {
             )
         }
         // Already a date-like string (YYYY-MM-DD or YYYY-MM or YYYY)
-        s if s.len() >= 4 && s.chars().next().map_or(false, |c| c.is_ascii_digit()) => {
+        s if s.len() >= 4 && s.chars().next().is_some_and(|c| c.is_ascii_digit()) => {
             Some(s.to_string())
         }
         _ => None,
@@ -303,15 +303,10 @@ fn find_codex_session_file(dir: &Path, session_id: &str) -> Option<std::path::Pa
 }
 
 /// Run search: query the DB, format and display results.
-#[allow(clippy::too_many_arguments)]
 pub fn run_search(
     query: &str,
     db_path: &Path,
-    file_pat: Option<&str>,
-    branch_pat: Option<&str>,
-    project_pat: Option<&str>,
-    source_filter: Option<&str>,
-    date_filter: Option<&DateFilter>,
+    filter: &db::SearchFilter,
     limit: i64,
     context_before: usize,
     context_after: usize,
@@ -323,7 +318,7 @@ pub fn run_search(
     }
 
     let conn = db::open_db(db_path, false)?;
-    let rows = match db::search(&conn, query, file_pat, branch_pat, project_pat, source_filter, date_filter, limit) {
+    let rows = match db::search(&conn, query, filter, limit) {
         Ok(r) => r,
         Err(e) => {
             eprintln!("Query error: {e}");
