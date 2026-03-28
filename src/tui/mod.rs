@@ -19,6 +19,7 @@ use crate::db;
 use app::App;
 
 pub use app::ExitAction;
+pub use app::PinnedFilters;
 
 fn init_terminal() -> Result<Terminal<CrosstermBackend<io::Stdout>>> {
     enable_raw_mode()?;
@@ -42,7 +43,7 @@ fn restore_terminal(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Re
 }
 
 /// Run the interactive TUI search interface.
-pub fn run(initial_input: &str) -> Result<Option<ExitAction>> {
+pub fn run(initial_input: &str, pinned: PinnedFilters) -> Result<Option<ExitAction>> {
     let db_path = config::default_db_path();
 
     // Auto-index before launching TUI
@@ -53,7 +54,7 @@ pub fn run(initial_input: &str) -> Result<Option<ExitAction>> {
 
     let conn = db::open_db(&db_path, true)?;
     let mut terminal = init_terminal()?;
-    let mut app = App::new(conn, initial_input);
+    let mut app = App::new(conn, initial_input, pinned);
 
     let result = run_loop(&mut terminal, &mut app);
 
@@ -104,7 +105,7 @@ mod tests {
     fn test_app() -> App {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         conn.execute_batch(crate::db::SCHEMA).unwrap();
-        App::new(conn, "")
+        App::new(conn, "", PinnedFilters::default())
     }
 
     #[test]

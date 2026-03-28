@@ -12,6 +12,31 @@ use crate::indexer;
 use crate::search;
 use crate::session::{App as SourceApp, Message as SessionMessage, SearchResult};
 
+/// Filters pinned via CLI flags — always applied, independent of search input.
+#[derive(Debug, Clone, Default)]
+pub struct PinnedFilters {
+    pub branch: Option<String>,
+    pub project: Option<String>,
+}
+
+impl PinnedFilters {
+    pub fn is_empty(&self) -> bool {
+        self.branch.is_none() && self.project.is_none()
+    }
+
+    /// Format pinned filters for display in the search box title.
+    pub fn display(&self) -> String {
+        let mut parts = Vec::new();
+        if let Some(ref p) = self.project {
+            parts.push(format!("project:{p}"));
+        }
+        if let Some(ref b) = self.branch {
+            parts.push(format!("branch:{b}"));
+        }
+        parts.join(" ")
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Mode {
     /// Browsing results with search input focused.
@@ -86,13 +111,17 @@ pub struct App {
     pub search_terms: Vec<String>,
     search_deadline: Option<Instant>,
 
+    /// CLI-pinned filters, always applied on top of search input.
+    pub pinned: PinnedFilters,
+
     // Database connection
     conn: Connection,
 }
 
 impl App {
-    pub fn new(conn: Connection, initial_input: &str) -> Self {
-        let results = db::list_recent(&conn, 50, &db::SearchFilter::default()).unwrap_or_default();
+    pub fn new(conn: Connection, initial_input: &str, pinned: PinnedFilters) -> Self {
+        let initial_filter = pinned_to_filter(&pinned);
+        let results = db::list_recent(&conn, 50, &initial_filter).unwrap_or_default();
         let status_message = format!("{} session(s)", results.len());
         let mut app = Self {
             mode: Mode::Normal,
@@ -111,6 +140,7 @@ impl App {
             last_query: String::new(),
             search_terms: Vec::new(),
             search_deadline: None,
+            pinned,
             conn,
         };
         if !initial_input.is_empty() {
@@ -360,7 +390,8 @@ impl App {
     }
 
     fn load_recent(&mut self) {
-        self.results = db::list_recent(&self.conn, 50, &db::SearchFilter::default()).unwrap_or_default();
+        let filter = pinned_to_filter(&self.pinned);
+        self.results = db::list_recent(&self.conn, 50, &filter).unwrap_or_default();
         self.status_message = format!("{} session(s)", self.results.len());
         self.selected = 0;
         self.scroll_offset = 0;
@@ -381,12 +412,18 @@ impl App {
 
         let parsed = search::parse_query(&query_str);
 
+        // Merge: inline filters override pinned filters
+        let branch_pat = parsed.branch.as_deref()
+            .or(self.pinned.branch.as_deref());
+        let project_pat = parsed.project.as_deref()
+            .or(self.pinned.project.as_deref());
+
         // If only filters and no text, list recent with filters
         if parsed.text.is_empty() {
             let filter = db::SearchFilter {
                 file_pat: parsed.file.as_deref(),
-                branch_pat: parsed.branch.as_deref(),
-                project_pat: parsed.project.as_deref(),
+                branch_pat,
+                project_pat,
                 source: parsed.source_filter(),
                 date: parsed.date.as_ref(),
             };
@@ -409,8 +446,8 @@ impl App {
         let normalized = db::prefix_query(&db::normalize_fts_query(&parsed.text));
         let filter = db::SearchFilter {
             file_pat: parsed.file.as_deref(),
-            branch_pat: parsed.branch.as_deref(),
-            project_pat: parsed.project.as_deref(),
+            branch_pat,
+            project_pat,
             source: parsed.source_filter(),
             date: parsed.date.as_ref(),
         };
@@ -503,5 +540,14 @@ impl App {
     /// Get the currently selected result (if any).
     pub fn selected_result(&self) -> Option<&SearchResult> {
         self.results.get(self.selected)
+    }
+}
+
+/// Build a `SearchFilter` from pinned filters (borrows from the struct).
+fn pinned_to_filter(pinned: &PinnedFilters) -> db::SearchFilter<'_> {
+    db::SearchFilter {
+        branch_pat: pinned.branch.as_deref(),
+        project_pat: pinned.project.as_deref(),
+        ..Default::default()
     }
 }

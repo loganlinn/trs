@@ -53,17 +53,31 @@ fn draw_search_input(f: &mut Frame, app: &App, area: Rect) {
     let input_value = app.input.value();
     let cursor_pos = app.input.visual_cursor();
 
+    let border_color = if app.mode == Mode::Normal {
+        Color::Cyan
+    } else {
+        Color::DarkGray
+    };
+
+    let title = if app.pinned.is_empty() {
+        Line::from(" Search (FTS5) ")
+    } else {
+        Line::from(vec![
+            Span::raw(" Search (FTS5) "),
+            Span::styled(
+                format!("[{}] ", app.pinned.display()),
+                Style::default().fg(Color::Yellow),
+            ),
+        ])
+    };
+
     let input_display = Paragraph::new(input_value)
         .style(Style::default().fg(Color::White))
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(if app.mode == Mode::Normal {
-                    Color::Cyan
-                } else {
-                    Color::DarkGray
-                }))
-                .title(" Search (FTS5) "),
+                .border_style(Style::default().fg(border_color))
+                .title(title),
         );
 
     f.render_widget(input_display, area);

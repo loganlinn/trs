@@ -48,6 +48,18 @@ pub struct Cli {
     )]
     pub color: ColorChoice,
 
+    /// Filter TUI sessions by git branch (current branch if omitted)
+    #[arg(short = 'b', long = "branch", num_args = 0..=1, default_missing_value = "")]
+    pub branch: Option<String>,
+
+    /// Filter TUI sessions by project/cwd (cwd if omitted)
+    #[arg(short = 'p', long = "project", num_args = 0..=1, default_missing_value = ".")]
+    pub project: Option<String>,
+
+    /// Shorthand for -p -b (current project + current branch)
+    #[arg(short = '.', num_args = 0)]
+    pub dot: bool,
+
     #[command(subcommand)]
     pub command: Option<Command>,
 }

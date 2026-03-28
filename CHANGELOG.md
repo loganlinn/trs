@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-03-28
+
+### Added
+
+- **TUI pinned filters** (`-b`, `-p`, `-.`): Launch the TUI with persistent branch and/or project filters that stay active across searches.
+  - `trs -b` — filter to current git branch.
+  - `trs -b main` — filter to an explicit branch.
+  - `trs -p` — filter to current working directory.
+  - `trs -p dotfiles` — filter to a named project.
+  - `trs -.` — shorthand for `-p -b` (current project + current branch).
+- **Pinned filter display**: Active pinned filters are shown as a yellow `[branch:main]` badge in the search box title, making scope visible at a glance.
+
 ### Changed
 
 - **`SearchFilter` struct**: Replaced positional filter arguments on `db::search()` and `db::list_recent()` with a `SearchFilter` struct, fixing `clippy::too_many_arguments`.

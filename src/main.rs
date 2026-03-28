@@ -19,6 +19,7 @@ use clap::Parser;
 
 use crate::cli::{Cli, Command, DbCommand};
 use crate::session::{App, IngestRecord, INGEST_SCHEMA};
+use crate::tui::PinnedFilters;
 
 fn main() {
     let cli = Cli::parse();
@@ -43,7 +44,7 @@ fn run(cli: Cli) -> Result<i32> {
                 // No query text: launch TUI with filters pre-populated
                 if !cli.no_tui && is_terminal::is_terminal(io::stdout()) {
                     let initial = args.to_tui_input();
-                    if let Some(action) = tui::run(&initial)? {
+                    if let Some(action) = tui::run(&initial, PinnedFilters::default())? {
                         exec_exit_action(action);
                     }
                     return Ok(0);
@@ -103,7 +104,20 @@ fn run(cli: Cli) -> Result<i32> {
         None => {
             // No subcommand: launch TUI if interactive, otherwise show help
             if !cli.no_tui && is_terminal::is_terminal(io::stdout()) {
-                if let Some(action) = tui::run("")? {
+                let mut branch = cli.branch;
+                let mut project = cli.project;
+                if cli.dot {
+                    branch.get_or_insert_with(String::new);
+                    project.get_or_insert_with(|| ".".to_string());
+                }
+                let branch = match branch.as_deref() {
+                    Some("") => current_git_branch(),
+                    other => other.map(str::to_string),
+                };
+                let project = project.as_deref()
+                    .map(search::resolve_project_filter);
+                let pinned = PinnedFilters { branch, project };
+                if let Some(action) = tui::run("", pinned)? {
                     exec_exit_action(action);
                 }
                 return Ok(0);
@@ -166,6 +180,20 @@ fn exec_exit_action(action: tui::ExitAction) -> ! {
     let err = cmd.exec();
     eprintln!("Failed to exec {bin}: {err}");
     process::exit(1);
+}
+
+/// Get the current git branch name, or None if not in a repo.
+fn current_git_branch() -> Option<String> {
+    process::Command::new("git")
+        .args(["rev-parse", "--abbrev-ref", "HEAD"])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .and_then(|o| {
+            let s = String::from_utf8(o.stdout).ok()?;
+            let s = s.trim();
+            if s.is_empty() || s == "HEAD" { None } else { Some(s.to_string()) }
+        })
 }
 
 // --- Ingest ---
