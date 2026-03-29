@@ -460,7 +460,11 @@ mod tests {
 
     #[test]
     fn test_resolve_project_filter_absolute() {
-        assert_eq!(resolve_project_filter("/tmp"), "/private/tmp");
+        let expected = std::fs::canonicalize("/tmp")
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        assert_eq!(resolve_project_filter("/tmp"), expected);
     }
 
     #[test]
@@ -482,13 +486,18 @@ mod tests {
 
     #[test]
     fn test_resolve_project_filter_wildcard() {
+        let canonical_tmp = std::fs::canonicalize("/tmp")
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+
         // trailing /* preserves wildcard marker
         let resolved = resolve_project_filter("/tmp/*");
-        assert_eq!(resolved, "/private/tmp*");
+        assert_eq!(resolved, format!("{canonical_tmp}*"));
 
         // trailing * also works
         let resolved = resolve_project_filter("/tmp*");
-        assert_eq!(resolved, "/private/tmp*");
+        assert_eq!(resolved, format!("{canonical_tmp}*"));
 
         // plain name with wildcard
         assert_eq!(resolve_project_filter("gamma*"), "gamma*");
