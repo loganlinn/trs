@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [0.3.1](https://github.com/loganlinn/trs/releases/tag/v0.3.1) - 2026-03-29
+
+### Changed
+
+- Internal refactor: replaced positional filter arguments on `db::search()` and `db::list_recent()` with a `SearchFilter` struct, resolving a `clippy::too_many_arguments` warning. No user-facing behaviour change. ([7cf5a4c](https://github.com/loganlinn/trs/commit/7cf5a4c99c749ac68b5b48e17b2e1c46e6878e4c))
+
 ## [0.4.0] - 2026-03-28
 
 ### Added
@@ -75,9 +81,7 @@
 
 ### Changed
 
-- Version bump.
-
-## [0.1.1] - 2026-03-18
+- Version bump.## [0.1.1] - 2026-03-18
 
 ### Added
 
