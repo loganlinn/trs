@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [0.4.2](https://github.com/loganlinn/trs/releases/tag/v0.4.2) - 2026-03-29
+
+### Fixed
+
+- Fixed two `resolve_project_filter` test assertions that hardcoded `/private/tmp` (macOS-specific) instead of dynamically resolving the canonical path, causing test failures on Linux. ([9c9dc70](https://github.com/loganlinn/trs/commit/9c9dc700738f4c0d4acc73351c36a01cc7a23de7))
+
 ## [0.4.0](https://github.com/loganlinn/trs/releases/tag/v0.4.0) - 2026-03-29
 
 ### Added
@@ -70,8 +76,6 @@
 
 ### Added
 
-- Show recent conversations on empty state in TUI.
-
-## [0.1.0] - 2026-03-17
+- Show recent conversations on empty state in TUI.## [0.1.0] - 2026-03-17
 
 - Initial release.
