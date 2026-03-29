@@ -7,7 +7,11 @@ Local-first, full-text search over chat transcripts.
 ## Install
 
 ```
-cargo install --path .
+mise -g use github:loganlinn/trs
+```
+
+```
+cargo install --git https://github.com/loganlinn/trs
 ```
 
 ## Usage
@@ -53,12 +57,12 @@ trs db import db.sqlite
 
 ## Configuration
 
-| Flag / Env | Description | Default |
-|---|---|---|
-| `-d` / `TRS_DB` | Database path | `$XDG_DATA_HOME/trs/index.db` |
-| `--color` / `TRS_COLOR` | Color output (`auto`, `always`, `never`) | `auto` |
-| `--no-tui` | Disable TUI even in interactive terminals | — |
-| `NO_COLOR` | Disable color ([no-color.org](https://no-color.org)) | — |
+| Flag / Env              | Description                                          | Default                       |
+| ----------------------- | ---------------------------------------------------- | ----------------------------- |
+| `-d` / `TRS_DB`         | Database path                                        | `$XDG_DATA_HOME/trs/index.db` |
+| `--color` / `TRS_COLOR` | Color output (`auto`, `always`, `never`)             | `auto`                        |
+| `--no-tui`              | Disable TUI even in interactive terminals            | —                             |
+| `NO_COLOR`              | Disable color ([no-color.org](https://no-color.org)) | —                             |
 
 ## License
 
