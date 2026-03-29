@@ -10,6 +10,7 @@ shellcheck = "latest"
 shfmt = "latest"
 actionlint = "latest"
 ripgrep = "latest"
+communique = "latest"
 rust = "latest"
 
 [tasks.build]
@@ -145,6 +146,36 @@ else
 fi
 
 mise run release:tag "$version" $dry_run_flag
+mise run release:notes "v${version}" $dry_run_flag
+'''
+
+[tasks."release:notes"]
+description = "Generate release notes and create GitHub release"
+usage = '''
+arg "[tag]" help="Git tag (default: latest tag)"
+flag "--dry-run" help="Generate notes without publishing"
+flag "--no-changelog" help="Skip CHANGELOG.md update"
+'''
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+
+tag="${usage_tag:-$(git describe --tags --abbrev=0)}"
+dry_run="${usage_dry_run:-false}"
+no_changelog="${usage_no_changelog:-false}"
+
+flags=()
+[[ "$dry_run" == "true" ]] && flags+=(--dry-run)
+[[ "$no_changelog" != "true" ]] && flags+=(--changelog)
+flags+=(--github-release)
+
+communique generate "${flags[@]}" "$tag"
+
+if [[ "$dry_run" != "true" && -n "$(git status --porcelain CHANGELOG.md)" ]]; then
+  git add CHANGELOG.md
+  git commit -m "changelog: $tag"
+  git push origin HEAD
+fi
 '''
 
 [settings]

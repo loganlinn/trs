@@ -63,10 +63,13 @@ jobs:
           path: artifacts
           merge-multiple: true
 
-      - name: Create release
+      - name: Upload release assets
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "${GITHUB_REF_NAME}" \
-            --generate-notes \
-            artifacts/*.tar.gz
+          tag="${GITHUB_REF_NAME}"
+          # Create release if it doesn't exist yet (fallback)
+          if ! gh release view "$tag" &>/dev/null; then
+            gh release create "$tag" --generate-notes
+          fi
+          gh release upload "$tag" artifacts/*.tar.gz --clobber
