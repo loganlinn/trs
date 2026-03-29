@@ -14,6 +14,8 @@ mise -g use github:loganlinn/trs
 cargo install --git https://github.com/loganlinn/trs
 ```
 
+Download a prebuilt binary from [GitHub Releases](https://github.com/loganlinn/trs/releases).
+
 ## Usage
 
 ```
