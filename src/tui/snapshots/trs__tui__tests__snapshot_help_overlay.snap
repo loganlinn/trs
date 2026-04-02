@@ -1,0 +1,28 @@
+---
+source: src/tui/mod.rs
+expression: buffer_view(terminal.backend().buffer())
+---
+┌ Search (┌ Help ────────────────────────────────────────────────────┐─────────┐
+│         │Keyboard Shortcuts                                        │         │
+└─────────│                                                          │─────────┘
+┌ Results │Results View                                              │─────────┐
+│Type to s│  Enter         Resume session (--resume)                 │         │
+│         │  Shift-Enter   Fork session (--fork-session)             │         │
+│         │  Tab           Open session detail                       │         │
+│         │  Esc           Quit (or clear input)                     │         │
+│         │  Up/Ctrl-P     Previous result                           │         │
+│         │  Down/Ctrl-N   Next result                               │         │
+│         │  Ctrl-U        Clear search                              │         │
+│         │  Ctrl-D/Ctrl-B Half-page scroll                          │         │
+│         │  y             Show session ID                           │         │
+│         │  r             Show resume command                       │         │
+│         │  Ctrl-/        Toggle this help                          │         │
+│         │                                                          │         │
+│         │Detail View                                               │         │
+│         │  Esc/q         Back to results                           │         │
+│         │  j/k           Scroll down/up                            │         │
+│         │  g/G           Top/bottom                                │         │
+│         │  n/N           Next/prev match                           │         │
+│         │  /             Focus search input                        │         │
+└─────────│  y             Show session ID                           │─────────┘
+0 session(s)                                                           Esc:close

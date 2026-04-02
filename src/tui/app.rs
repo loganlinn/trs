@@ -2,7 +2,8 @@
 
 use std::time::Instant;
 
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
+use ratatui::widgets::ListState;
 use rusqlite::Connection;
 use tui_input::backend::crossterm::EventHandler;
 use tui_input::Input;
@@ -91,8 +92,7 @@ pub struct App {
     pub mode: Mode,
     pub input: Input,
     pub results: Vec<SearchResult>,
-    pub selected: usize,
-    pub scroll_offset: usize,
+    pub list_state: ListState,
     pub should_quit: bool,
     pub exit_action: Option<ExitAction>,
     pub status_message: String,
@@ -123,12 +123,15 @@ impl App {
         let initial_filter = pinned_to_filter(&pinned);
         let results = db::list_recent(&conn, 50, &initial_filter).unwrap_or_default();
         let status_message = format!("{} session(s)", results.len());
+        let mut list_state = ListState::default();
+        if !results.is_empty() {
+            list_state.select(Some(0));
+        }
         let mut app = Self {
             mode: Mode::Normal,
             input: Input::from(initial_input),
             results,
-            selected: 0,
-            scroll_offset: 0,
+            list_state,
             should_quit: false,
             exit_action: None,
             status_message,
@@ -149,6 +152,11 @@ impl App {
         app
     }
 
+    /// Index of the currently selected result (0 if nothing selected).
+    pub fn selected_index(&self) -> usize {
+        self.list_state.selected().unwrap_or(0)
+    }
+
     /// Handle a key event and return an optional message.
     pub fn handle_key(&mut self, key: KeyEvent) -> Option<Message> {
         match self.mode {
@@ -161,6 +169,23 @@ impl App {
             },
             Mode::Detail => self.handle_detail_key(key),
             Mode::Normal => self.handle_normal_key(key),
+        }
+    }
+
+    /// Handle a mouse event and return an optional message.
+    pub fn handle_mouse(&self, mouse: MouseEvent) -> Option<Message> {
+        match mouse.kind {
+            MouseEventKind::ScrollDown => match self.mode {
+                Mode::Normal => Some(Message::SelectNext),
+                Mode::Detail => Some(Message::DetailScrollDown),
+                Mode::Help => None,
+            },
+            MouseEventKind::ScrollUp => match self.mode {
+                Mode::Normal => Some(Message::SelectPrev),
+                Mode::Detail => Some(Message::DetailScrollUp),
+                Mode::Help => None,
+            },
+            _ => None,
         }
     }
 
@@ -276,13 +301,14 @@ impl App {
             }
             Message::SelectNext => {
                 if !self.results.is_empty() {
-                    self.selected = (self.selected + 1).min(self.results.len() - 1);
-                    self.ensure_selected_visible();
+                    let i = self.selected_index();
+                    self.list_state
+                        .select(Some((i + 1).min(self.results.len() - 1)));
                 }
             }
             Message::SelectPrev => {
-                self.selected = self.selected.saturating_sub(1);
-                self.ensure_selected_visible();
+                let i = self.selected_index();
+                self.list_state.select(Some(i.saturating_sub(1)));
             }
             Message::ScrollHalfDown => {
                 if self.mode == Mode::Detail {
@@ -292,20 +318,21 @@ impl App {
                         .min(self.detail_max_scroll());
                 } else {
                     let half = 10;
-                    self.selected = (self.selected + half).min(if self.results.is_empty() {
+                    let max = if self.results.is_empty() {
                         0
                     } else {
                         self.results.len() - 1
-                    });
-                    self.ensure_selected_visible();
+                    };
+                    self.list_state
+                        .select(Some((self.selected_index() + half).min(max)));
                 }
             }
             Message::ScrollHalfUp => {
                 if self.mode == Mode::Detail {
                     self.detail_scroll = self.detail_scroll.saturating_sub(10);
                 } else {
-                    self.selected = self.selected.saturating_sub(10);
-                    self.ensure_selected_visible();
+                    self.list_state
+                        .select(Some(self.selected_index().saturating_sub(10)));
                 }
             }
             Message::OpenDetail => {
@@ -323,12 +350,12 @@ impl App {
                 self.mode = Mode::Normal;
             }
             Message::CopySessionId => {
-                if let Some(result) = self.results.get(self.selected) {
+                if let Some(result) = self.results.get(self.selected_index()) {
                     self.status_message = format!("Session ID: {}", result.session_id);
                 }
             }
             Message::CopyResumeCmd => {
-                if let Some(result) = self.results.get(self.selected) {
+                if let Some(result) = self.results.get(self.selected_index()) {
                     let app = SourceApp::parse(&result.source).unwrap_or(SourceApp::ClaudeCode);
                     let cmd = app.resume_cmd(&result.session_id);
                     self.status_message = format!("Resume: {cmd}");
@@ -367,7 +394,7 @@ impl App {
                 }
             }
             Message::ResumeSession => {
-                if let Some(result) = self.results.get(self.selected) {
+                if let Some(result) = self.results.get(self.selected_index()) {
                     self.exit_action = Some(ExitAction::Resume {
                         session_id: result.session_id.clone(),
                         cwd: result.cwd.clone(),
@@ -377,7 +404,7 @@ impl App {
                 }
             }
             Message::ForkSession => {
-                if let Some(result) = self.results.get(self.selected) {
+                if let Some(result) = self.results.get(self.selected_index()) {
                     self.exit_action = Some(ExitAction::Fork {
                         session_id: result.session_id.clone(),
                         cwd: result.cwd.clone(),
@@ -393,8 +420,11 @@ impl App {
         let filter = pinned_to_filter(&self.pinned);
         self.results = db::list_recent(&self.conn, 50, &filter).unwrap_or_default();
         self.status_message = format!("{} session(s)", self.results.len());
-        self.selected = 0;
-        self.scroll_offset = 0;
+        self.list_state.select(if self.results.is_empty() {
+            None
+        } else {
+            Some(0)
+        });
         self.last_query.clear();
         self.search_terms.clear();
     }
@@ -413,10 +443,8 @@ impl App {
         let parsed = search::parse_query(&query_str);
 
         // Merge: inline filters override pinned filters
-        let branch_pat = parsed.branch.as_deref()
-            .or(self.pinned.branch.as_deref());
-        let project_pat = parsed.project.as_deref()
-            .or(self.pinned.project.as_deref());
+        let branch_pat = parsed.branch.as_deref().or(self.pinned.branch.as_deref());
+        let project_pat = parsed.project.as_deref().or(self.pinned.project.as_deref());
 
         // If only filters and no text, list recent with filters
         if parsed.text.is_empty() {
@@ -432,8 +460,11 @@ impl App {
                     self.search_terms.clear();
                     self.status_message = format!("{} session(s)", rows.len());
                     self.results = rows;
-                    self.selected = 0;
-                    self.scroll_offset = 0;
+                    self.list_state.select(if self.results.is_empty() {
+                        None
+                    } else {
+                        Some(0)
+                    });
                 }
                 Err(_) => {
                     self.status_message = "Error".to_string();
@@ -456,25 +487,30 @@ impl App {
                 self.search_terms = search::query_terms(&parsed.text);
                 self.status_message = format!("{} result(s)", rows.len());
                 self.results = rows;
-                self.selected = 0;
-                self.scroll_offset = 0;
+                self.list_state.select(if self.results.is_empty() {
+                    None
+                } else {
+                    Some(0)
+                });
             }
             Err(_) => {
                 self.status_message = "Invalid query".to_string();
                 self.results.clear();
-                self.selected = 0;
+                self.list_state.select(None);
             }
         }
         self.last_query = query_str;
     }
 
     fn open_detail(&mut self) {
-        let result = match self.results.get(self.selected) {
+        let result = match self.results.get(self.selected_index()) {
             Some(r) => r,
             None => return,
         };
 
-        if let Some((app, path)) = search::session_jsonl_path(&result.session_id, &result.slug, &result.source) {
+        if let Some((app, path)) =
+            search::session_jsonl_path(&result.session_id, &result.slug, &result.source)
+        {
             match indexer::extract_messages_for(&path, &app) {
                 Ok(msgs) => {
                     // Find match indices
@@ -515,16 +551,9 @@ impl App {
         }
     }
 
-    fn ensure_selected_visible(&mut self) {
-        // Keep selected item within a visible window.
-        // The actual visible height depends on terminal size, but we use
-        // a reasonable default and let the UI clamp as needed.
-        let visible_height = 20;
-        if self.selected < self.scroll_offset {
-            self.scroll_offset = self.selected;
-        } else if self.selected >= self.scroll_offset + visible_height {
-            self.scroll_offset = self.selected - visible_height + 1;
-        }
+    /// Get the currently selected result (if any).
+    pub fn selected_result(&self) -> Option<&SearchResult> {
+        self.results.get(self.selected_index())
     }
 
     /// Fire pending debounced search if deadline has passed.
@@ -535,11 +564,6 @@ impl App {
                 self.perform_search();
             }
         }
-    }
-
-    /// Get the currently selected result (if any).
-    pub fn selected_result(&self) -> Option<&SearchResult> {
-        self.results.get(self.selected)
     }
 }
 

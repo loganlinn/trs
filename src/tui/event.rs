@@ -1,20 +1,64 @@
-//! Event handling: poll crossterm events with timeout.
+//! Event handling: channel-based event handler with dedicated thread.
 
+use std::sync::mpsc;
+use std::thread;
 use std::time::Duration;
 
-use anyhow::Result;
-use crossterm::event::{self, Event, KeyEventKind};
+use crossterm::event::{self, Event as CrosstermEvent, KeyEventKind};
 
-use super::app::{App, Message};
+/// Terminal events.
+pub enum Event {
+    /// Periodic tick for debounced operations.
+    Tick,
+    /// Key press.
+    Key(crossterm::event::KeyEvent),
+    /// Mouse event.
+    Mouse(crossterm::event::MouseEvent),
+    /// Terminal resize.
+    #[allow(dead_code)]
+    Resize(u16, u16),
+}
 
-/// Poll for a crossterm event and convert to an app Message.
-pub fn handle_event(app: &mut App) -> Result<Option<Message>> {
-    if event::poll(Duration::from_millis(50))? {
-        match event::read()? {
-            Event::Key(key) if key.kind == KeyEventKind::Press => Ok(app.handle_key(key)),
-            _ => Ok(None),
-        }
-    } else {
-        Ok(None)
+/// Polls crossterm events on a background thread, delivering them over a channel.
+pub struct EventHandler {
+    rx: mpsc::Receiver<Event>,
+}
+
+impl EventHandler {
+    /// Spawn a new event handler. `tick_rate` controls idle tick frequency.
+    pub fn new(tick_rate: Duration) -> Self {
+        let (tx, rx) = mpsc::channel();
+
+        thread::spawn(move || loop {
+            if event::poll(tick_rate).unwrap_or(false) {
+                match event::read() {
+                    Ok(CrosstermEvent::Key(key)) if key.kind == KeyEventKind::Press => {
+                        if tx.send(Event::Key(key)).is_err() {
+                            break;
+                        }
+                    }
+                    Ok(CrosstermEvent::Mouse(mouse)) => {
+                        if tx.send(Event::Mouse(mouse)).is_err() {
+                            break;
+                        }
+                    }
+                    Ok(CrosstermEvent::Resize(w, h)) => {
+                        if tx.send(Event::Resize(w, h)).is_err() {
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            } else if tx.send(Event::Tick).is_err() {
+                break;
+            }
+        });
+
+        Self { rx }
+    }
+
+    /// Block until the next event is available.
+    pub fn next(&self) -> Result<Event, mpsc::RecvError> {
+        self.rx.recv()
     }
 }

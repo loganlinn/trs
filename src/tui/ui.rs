@@ -3,7 +3,10 @@
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap};
+use ratatui::widgets::{
+    Block, Borders, Clear, List, ListItem, Paragraph, Scrollbar, ScrollbarOrientation,
+    ScrollbarState, Wrap,
+};
 use ratatui::Frame;
 
 use crate::display;
@@ -22,7 +25,7 @@ fn role_color(role: &MessageRole) -> Color {
 }
 
 /// Main draw function dispatching to the active mode.
-pub fn draw(f: &mut Frame, app: &App) {
+pub fn draw(f: &mut Frame, app: &mut App) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -38,7 +41,8 @@ pub fn draw(f: &mut Frame, app: &App) {
         Mode::Normal => draw_results(f, app, chunks[1]),
         Mode::Detail => draw_detail(f, app, chunks[1]),
         Mode::Help => {
-            match app.help_return_mode {
+            let return_mode = app.help_return_mode.clone();
+            match return_mode {
                 Mode::Detail => draw_detail(f, app, chunks[1]),
                 _ => draw_results(f, app, chunks[1]),
             }
@@ -89,7 +93,7 @@ fn draw_search_input(f: &mut Frame, app: &App, area: Rect) {
     }
 }
 
-fn draw_results(f: &mut Frame, app: &App, area: Rect) {
+fn draw_results(f: &mut Frame, app: &mut App, area: Rect) {
     if app.results.is_empty() {
         let msg = if app.input.value().is_empty() {
             "Type to search sessions. Press Ctrl-/ for help."
@@ -103,23 +107,13 @@ fn draw_results(f: &mut Frame, app: &App, area: Rect) {
         return;
     }
 
-    let visible_height = area.height.saturating_sub(2) as usize; // minus borders
-    let offset = if app.selected >= app.scroll_offset + visible_height {
-        app.selected - visible_height + 1
-    } else if app.selected < app.scroll_offset {
-        app.selected
-    } else {
-        app.scroll_offset
-    };
-
+    let selected = app.list_state.selected();
     let items: Vec<ListItem> = app
         .results
         .iter()
         .enumerate()
-        .skip(offset)
-        .take(visible_height)
         .map(|(i, result)| {
-            let is_selected = i == app.selected;
+            let is_selected = selected == Some(i);
             result_list_item(result, is_selected, &app.search_terms)
         })
         .collect();
@@ -130,7 +124,12 @@ fn draw_results(f: &mut Frame, app: &App, area: Rect) {
             .title(format!(" Results ({}) ", app.results.len())),
     );
 
-    f.render_widget(list, area);
+    f.render_stateful_widget(list, area, &mut app.list_state);
+
+    let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight);
+    let mut scrollbar_state = ScrollbarState::new(app.results.len().saturating_sub(1))
+        .position(app.selected_index());
+    f.render_stateful_widget(scrollbar, area, &mut scrollbar_state);
 }
 
 fn result_list_item<'a>(
@@ -323,6 +322,11 @@ fn draw_detail(f: &mut Frame, app: &App, area: Rect) {
         .wrap(Wrap { trim: false });
 
     f.render_widget(paragraph, area);
+
+    let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight);
+    let mut scrollbar_state = ScrollbarState::new(app.detail_messages.len().saturating_sub(1))
+        .position(app.detail_scroll);
+    f.render_stateful_widget(scrollbar, area, &mut scrollbar_state);
 }
 
 /// Style constants matching chat's conversation rendering.
@@ -477,7 +481,7 @@ fn draw_status_bar(f: &mut Frame, app: &App, area: Rect) {
                 if app.results.is_empty() {
                     String::new()
                 } else {
-                    format!("{}/{}", app.selected + 1, app.results.len())
+                    format!("{}/{}", app.selected_index() + 1, app.results.len())
                 }
             }
             Mode::Detail => {

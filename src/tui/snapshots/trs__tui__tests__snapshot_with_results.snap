@@ -1,0 +1,28 @@
+---
+source: src/tui/mod.rs
+expression: buffer_view(terminal.backend().buffer())
+---
+┌ Search (FTS5) ───────────────────────────────────────────────────────────────┐
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
+┌ Results (5) ─────────────────────────────────────────────────────────────────▲
+│> project-0  @main  2026-03-01  3 msgs                                        █
+│    Help me with task 0                                                       █
+│  project-1  @main  2026-03-02  6 msgs                                        █
+│    Help me with task 1                                                       █
+│  project-2  @main  2026-03-03  9 msgs                                        █
+│    Help me with task 2                                                       █
+│  project-3  @main  2026-03-04  12 msgs                                       █
+│    Help me with task 3                                                       █
+│  project-4  @main  2026-03-05  15 msgs                                       █
+│    Help me with task 4                                                       █
+│                                                                              █
+│                                                                              █
+│                                                                              █
+│                                                                              █
+│                                                                              █
+│                                                                              █
+│                                                                              ║
+│                                                                              ║
+└──────────────────────────────────────────────────────────────────────────────▼
+5 session(s)          Enter:resume  S-Enter:fork  Tab:detail  C-/:help  Esc:quit

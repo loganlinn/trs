@@ -4,10 +4,13 @@ mod app;
 mod event;
 mod ui;
 
-use std::io::{self, stdout};
+use std::io;
+use std::ops::{Deref, DerefMut};
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use crossterm::{
+    event::{DisableMouseCapture, EnableMouseCapture},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -17,29 +20,73 @@ use ratatui::Terminal;
 use crate::config;
 use crate::db;
 use app::App;
+use event::{Event, EventHandler};
 
 pub use app::ExitAction;
 pub use app::PinnedFilters;
 
-fn init_terminal() -> Result<Terminal<CrosstermBackend<io::Stdout>>> {
-    enable_raw_mode()?;
-    execute!(stdout(), EnterAlternateScreen)?;
-
-    let original_hook = std::panic::take_hook();
-    std::panic::set_hook(Box::new(move |info| {
-        let _ = execute!(io::stdout(), LeaveAlternateScreen);
-        let _ = disable_raw_mode();
-        original_hook(info);
-    }));
-
-    Terminal::new(CrosstermBackend::new(stdout())).context("failed to initialize terminal")
+/// Wrapper around [`Terminal`] with lifecycle management and guaranteed cleanup.
+///
+/// Renders to stderr so stdout remains available for piping.
+struct Tui {
+    terminal: Terminal<CrosstermBackend<io::Stderr>>,
+    mouse: bool,
 }
 
-fn restore_terminal(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
-    disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
-    terminal.show_cursor()?;
-    Ok(())
+impl Tui {
+    fn new(mouse: bool) -> Result<Self> {
+        let backend = CrosstermBackend::new(io::stderr());
+        let terminal = Terminal::new(backend).context("failed to initialize terminal")?;
+        let mut tui = Self { terminal, mouse };
+        tui.enter()?;
+        Ok(tui)
+    }
+
+    fn enter(&mut self) -> Result<()> {
+        enable_raw_mode()?;
+        execute!(io::stderr(), EnterAlternateScreen)?;
+        if self.mouse {
+            execute!(io::stderr(), EnableMouseCapture)?;
+        }
+
+        let original_hook = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            let _ = execute!(io::stderr(), DisableMouseCapture, LeaveAlternateScreen);
+            let _ = disable_raw_mode();
+            original_hook(info);
+        }));
+
+        Ok(())
+    }
+
+    fn exit(&mut self) -> Result<()> {
+        if self.mouse {
+            execute!(self.terminal.backend_mut(), DisableMouseCapture)?;
+        }
+        execute!(self.terminal.backend_mut(), LeaveAlternateScreen)?;
+        disable_raw_mode()?;
+        self.terminal.show_cursor()?;
+        Ok(())
+    }
+}
+
+impl Deref for Tui {
+    type Target = Terminal<CrosstermBackend<io::Stderr>>;
+    fn deref(&self) -> &Self::Target {
+        &self.terminal
+    }
+}
+
+impl DerefMut for Tui {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.terminal
+    }
+}
+
+impl Drop for Tui {
+    fn drop(&mut self) {
+        let _ = self.exit();
+    }
 }
 
 /// Run the interactive TUI search interface.
@@ -53,22 +100,36 @@ pub fn run(initial_input: &str, pinned: PinnedFilters) -> Result<Option<ExitActi
     }
 
     let conn = db::open_db(&db_path, true)?;
-    let mut terminal = init_terminal()?;
+    let mut tui = Tui::new(true)?;
     let mut app = App::new(conn, initial_input, pinned);
+    let events = EventHandler::new(Duration::from_millis(100));
 
-    let result = run_loop(&mut terminal, &mut app);
+    let result = run_loop(&mut tui, &mut app, &events);
 
-    restore_terminal(&mut terminal)?;
+    drop(tui);
     result?;
     Ok(app.exit_action.clone())
 }
 
-fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, app: &mut App) -> Result<()> {
+fn run_loop(tui: &mut Tui, app: &mut App, events: &EventHandler) -> Result<()> {
     loop {
-        terminal.draw(|f| ui::draw(f, app))?;
+        tui.draw(|f| ui::draw(f, app))?;
 
-        if let Some(msg) = event::handle_event(app)? {
-            app.update(msg);
+        match events
+            .next()
+            .map_err(|_| anyhow::anyhow!("event channel closed"))?
+        {
+            Event::Key(key) => {
+                if let Some(msg) = app.handle_key(key) {
+                    app.update(msg);
+                }
+            }
+            Event::Mouse(mouse) => {
+                if let Some(msg) = app.handle_mouse(mouse) {
+                    app.update(msg);
+                }
+            }
+            Event::Tick | Event::Resize(_, _) => {}
         }
 
         app.tick();
@@ -108,24 +169,9 @@ mod tests {
         App::new(conn, "", PinnedFilters::default())
     }
 
-    #[test]
-    fn test_quit_from_normal_mode() {
-        let mut app = test_app();
-        assert!(!app.should_quit);
-        let msg = app.handle_key(key(KeyCode::Esc));
-        assert!(matches!(msg, Some(Message::Quit)));
-        if let Some(m) = msg {
-            app.update(m);
-        }
-        assert!(app.should_quit);
-    }
-
-    #[test]
-    fn test_enter_produces_resume_message() {
-        let mut app = test_app();
-        // Insert a fake result so Enter has something to act on
-        app.results.push(crate::session::SearchResult {
-            session_id: "test-1".into(),
+    fn make_result(id: &str) -> crate::session::SearchResult {
+        crate::session::SearchResult {
+            session_id: id.into(),
             source: "claude-code".into(),
             cwd: "/tmp".into(),
             slug: "proj".into(),
@@ -141,7 +187,26 @@ mod tests {
             custom_title: None,
             metadata: None,
             rank: 0.0,
-        });
+        }
+    }
+
+    #[test]
+    fn test_quit_from_normal_mode() {
+        let mut app = test_app();
+        assert!(!app.should_quit);
+        let msg = app.handle_key(key(KeyCode::Esc));
+        assert!(matches!(msg, Some(Message::Quit)));
+        if let Some(m) = msg {
+            app.update(m);
+        }
+        assert!(app.should_quit);
+    }
+
+    #[test]
+    fn test_enter_produces_resume_message() {
+        let mut app = test_app();
+        app.results.push(make_result("test-1"));
+        app.list_state.select(Some(0));
 
         let msg = app.handle_key(key(KeyCode::Enter));
         assert!(matches!(msg, Some(Message::ResumeSession)));
@@ -150,7 +215,6 @@ mod tests {
     #[test]
     fn test_enter_no_results_is_noop() {
         let mut app = test_app();
-        // No results: Enter should produce None
         let msg = app.handle_key(key(KeyCode::Enter));
         assert!(msg.is_none());
     }
@@ -188,7 +252,6 @@ mod tests {
     #[test]
     fn test_navigate_down_up() {
         let mut app = test_app();
-        // Add two results
         for i in 0..2 {
             app.results.push(crate::session::SearchResult {
                 session_id: format!("s{i}"),
@@ -209,25 +272,25 @@ mod tests {
                 rank: 0.0,
             });
         }
-        assert_eq!(app.selected, 0);
+        app.list_state.select(Some(0));
+        assert_eq!(app.selected_index(), 0);
 
         let msg = app.handle_key(key(KeyCode::Down));
         if let Some(m) = msg {
             app.update(m);
         }
-        assert_eq!(app.selected, 1);
+        assert_eq!(app.selected_index(), 1);
 
         let msg = app.handle_key(key(KeyCode::Up));
         if let Some(m) = msg {
             app.update(m);
         }
-        assert_eq!(app.selected, 0);
+        assert_eq!(app.selected_index(), 0);
     }
 
     #[test]
     fn test_clear_input() {
         let mut app = test_app();
-        // Type something
         app.input = "hello".into();
         let msg = app.handle_key(key_ctrl(KeyCode::Char('u')));
         assert!(matches!(msg, Some(Message::ClearInput)));
@@ -235,5 +298,80 @@ mod tests {
             app.update(m);
         }
         assert!(app.input.value().is_empty());
+    }
+
+    // --- Snapshot tests ---
+
+    fn buffer_view(buf: &ratatui::buffer::Buffer) -> String {
+        let w = buf.area.width as usize;
+        let content = buf.content();
+        let mut lines = Vec::new();
+        for row in 0..buf.area.height as usize {
+            let mut line = String::with_capacity(w);
+            for col in 0..w {
+                line.push_str(content[row * w + col].symbol());
+            }
+            lines.push(line.trim_end().to_string());
+        }
+        lines.join("\n")
+    }
+
+    #[test]
+    fn snapshot_empty_state() {
+        let mut app = test_app();
+        let backend = ratatui::backend::TestBackend::new(80, 24);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| super::ui::draw(f, &mut app))
+            .unwrap();
+        insta::assert_snapshot!(buffer_view(terminal.backend().buffer()));
+    }
+
+    #[test]
+    fn snapshot_with_results() {
+        let mut app = test_app();
+        for i in 0..5 {
+            app.results.push(crate::session::SearchResult {
+                session_id: format!("session-{i}"),
+                source: "claude-code".into(),
+                cwd: format!("/home/user/project-{i}"),
+                slug: format!("project-{i}"),
+                git_branches: r#"["main"]"#.into(),
+                start_time: format!("2026-03-{:02}T10:00:00Z", i + 1),
+                end_time: String::new(),
+                files_touched: "[]".into(),
+                tools_used: "[]".into(),
+                message_count: (i + 1) * 3,
+                first_message: format!("Help me with task {i}"),
+                summary: String::new(),
+                content_hash: None,
+                custom_title: None,
+                metadata: None,
+                rank: 0.0,
+            });
+        }
+        app.list_state.select(Some(0));
+        app.status_message = "5 session(s)".into();
+
+        let backend = ratatui::backend::TestBackend::new(80, 24);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| super::ui::draw(f, &mut app))
+            .unwrap();
+        insta::assert_snapshot!(buffer_view(terminal.backend().buffer()));
+    }
+
+    #[test]
+    fn snapshot_help_overlay() {
+        let mut app = test_app();
+        app.mode = Mode::Help;
+        app.help_return_mode = Mode::Normal;
+
+        let backend = ratatui::backend::TestBackend::new(80, 24);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| super::ui::draw(f, &mut app))
+            .unwrap();
+        insta::assert_snapshot!(buffer_view(terminal.backend().buffer()));
     }
 }

@@ -22,11 +22,15 @@ sha2 = "0.10"
 chrono = { version = "0.4", features = ["serde"] }
 tui-input = "0.15"
 unicode-width = "0.2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
 
 [dev-dependencies]
 tempfile = "3"
+insta = "1"
 
 [profile.release]
 opt-level = 3
 lto = true
 strip = true
+codegen-units = 1

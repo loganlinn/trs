@@ -10,6 +10,11 @@ pub fn default_db_path() -> PathBuf {
     xdg_data_home().join("trs").join("index.db")
 }
 
+/// Default log directory: $XDG_DATA_HOME/trs/
+pub fn log_dir() -> PathBuf {
+    xdg_data_home().join("trs")
+}
+
 fn dirs_home() -> PathBuf {
     directories::BaseDirs::new()
         .map(|d| d.home_dir().to_path_buf())

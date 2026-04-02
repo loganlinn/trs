@@ -21,7 +21,33 @@ use crate::cli::{Cli, Command, DbCommand};
 use crate::session::{App, IngestRecord, INGEST_SCHEMA};
 use crate::tui::PinnedFilters;
 
+fn init_tracing() {
+    use tracing_subscriber::EnvFilter;
+
+    let log_dir = config::log_dir();
+    if std::fs::create_dir_all(&log_dir).is_err() {
+        return;
+    }
+    let log_file = match std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(log_dir.join("trs.log"))
+    {
+        Ok(f) => f,
+        Err(_) => return,
+    };
+    let filter = EnvFilter::try_from_env("TRS_LOG")
+        .or_else(|_| EnvFilter::try_from_env("RUST_LOG"))
+        .unwrap_or_else(|_| EnvFilter::new("warn"));
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_writer(std::sync::Mutex::new(log_file))
+        .with_ansi(false)
+        .try_init();
+}
+
 fn main() {
+    init_tracing();
     let cli = Cli::parse();
     let code = match run(cli) {
         Ok(code) => code,
@@ -42,7 +68,7 @@ fn run(cli: Cli) -> Result<i32> {
             let query_str = args.query.join(" ");
             if query_str.is_empty() {
                 // No query text: launch TUI with filters pre-populated
-                if !cli.no_tui && is_terminal::is_terminal(io::stdout()) {
+                if !cli.no_tui && is_terminal::is_terminal(io::stderr()) {
                     let initial = args.to_tui_input();
                     if let Some(action) = tui::run(&initial, PinnedFilters::default())? {
                         exec_exit_action(action);
@@ -103,7 +129,7 @@ fn run(cli: Cli) -> Result<i32> {
         }
         None => {
             // No subcommand: launch TUI if interactive, otherwise show help
-            if !cli.no_tui && is_terminal::is_terminal(io::stdout()) {
+            if !cli.no_tui && is_terminal::is_terminal(io::stderr()) {
                 let mut branch = cli.branch;
                 let mut project = cli.project;
                 if cli.dot {
