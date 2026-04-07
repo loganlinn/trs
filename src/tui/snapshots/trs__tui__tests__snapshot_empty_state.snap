@@ -25,4 +25,4 @@ expression: buffer_view(terminal.backend().buffer())
 │                                                                              │
 │                                                                              │
 └──────────────────────────────────────────────────────────────────────────────┘
-0 session(s)          Enter:resume  S-Enter:fork  Tab:detail  C-/:help  Esc:quit
+0 session(s)       Enter:resume  S-Enter:fork  Tab:detail  Ctrl-/:help  Esc:quit

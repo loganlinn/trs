@@ -2,16 +2,18 @@
 
 use std::time::Instant;
 
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
-use ratatui::widgets::ListState;
+use crossterm::event::{KeyCode, KeyEvent, MouseEvent, MouseEventKind};
+use ratatui::widgets::TableState;
 use rusqlite::Connection;
 use tui_input::backend::crossterm::EventHandler;
 use tui_input::Input;
 
 use crate::db;
+use crate::display;
 use crate::indexer;
+use crate::keys::KeyBindings;
 use crate::search;
-use crate::session::{App as SourceApp, Message as SessionMessage, SearchResult};
+use crate::session::{Message as SessionMessage, SearchResult};
 
 /// Filters pinned via CLI flags — always applied, independent of search input.
 #[derive(Debug, Clone, Default)]
@@ -62,7 +64,6 @@ pub enum Message {
     ToggleHelp,
     FocusSearch,
     CopySessionId,
-    CopyResumeCmd,
     DetailScrollDown,
     DetailScrollUp,
     DetailTop,
@@ -92,10 +93,15 @@ pub struct App {
     pub mode: Mode,
     pub input: Input,
     pub results: Vec<SearchResult>,
-    pub list_state: ListState,
+    pub table_state: TableState,
     pub should_quit: bool,
     pub exit_action: Option<ExitAction>,
     pub status_message: String,
+
+    // Preview pane state
+    pub preview_snippets: Vec<display::MessageSnippet>,
+    pub preview_scroll: usize,
+    preview_session_id: String,
 
     // Detail view state
     pub detail_messages: Vec<SessionMessage>,
@@ -114,27 +120,33 @@ pub struct App {
     /// CLI-pinned filters, always applied on top of search input.
     pub pinned: PinnedFilters,
 
+    /// Configurable key bindings.
+    pub keys: KeyBindings,
+
     // Database connection
     conn: Connection,
 }
 
 impl App {
-    pub fn new(conn: Connection, initial_input: &str, pinned: PinnedFilters) -> Self {
+    pub fn new(conn: Connection, initial_input: &str, pinned: PinnedFilters, keys: KeyBindings) -> Self {
         let initial_filter = pinned_to_filter(&pinned);
         let results = db::list_recent(&conn, 50, &initial_filter).unwrap_or_default();
         let status_message = format!("{} session(s)", results.len());
-        let mut list_state = ListState::default();
+        let mut table_state = TableState::default();
         if !results.is_empty() {
-            list_state.select(Some(0));
+            table_state.select(Some(0));
         }
         let mut app = Self {
             mode: Mode::Normal,
             input: Input::from(initial_input),
             results,
-            list_state,
+            table_state,
             should_quit: false,
             exit_action: None,
             status_message,
+            preview_snippets: Vec::new(),
+            preview_scroll: 0,
+            preview_session_id: String::new(),
             detail_messages: Vec::new(),
             detail_scroll: 0,
             detail_match_indices: Vec::new(),
@@ -144,29 +156,31 @@ impl App {
             search_terms: Vec::new(),
             search_deadline: None,
             pinned,
+            keys,
             conn,
         };
         if !initial_input.is_empty() {
             app.perform_search();
         }
+        app.load_preview();
         app
     }
 
     /// Index of the currently selected result (0 if nothing selected).
     pub fn selected_index(&self) -> usize {
-        self.list_state.selected().unwrap_or(0)
+        self.table_state.selected().unwrap_or(0)
     }
 
     /// Handle a key event and return an optional message.
     pub fn handle_key(&mut self, key: KeyEvent) -> Option<Message> {
         match self.mode {
-            Mode::Help => match key.code {
-                KeyCode::Esc | KeyCode::Char('q') => Some(Message::Back),
-                KeyCode::Char('/') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            Mode::Help => {
+                if self.keys.help.close.matches(&key) {
                     Some(Message::Back)
+                } else {
+                    None
                 }
-                _ => None,
-            },
+            }
             Mode::Detail => self.handle_detail_key(key),
             Mode::Normal => self.handle_normal_key(key),
         }
@@ -190,96 +204,100 @@ impl App {
     }
 
     fn handle_normal_key(&mut self, key: KeyEvent) -> Option<Message> {
-        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-        let shift = key.modifiers.contains(KeyModifiers::SHIFT);
+        let keys = &self.keys.normal;
 
-        match (key.code, ctrl) {
-            (KeyCode::Esc, _) => {
-                if self.input.value().is_empty() {
-                    Some(Message::Quit)
-                } else {
-                    Some(Message::ClearInput)
-                }
-            }
-            (KeyCode::Char('q'), false) => {
-                // 'q' quits only if input is empty (otherwise it's a search char)
-                if self.input.value().is_empty() {
-                    Some(Message::Quit)
-                } else {
-                    self.input.handle_event(&crossterm::event::Event::Key(key));
-                    Some(Message::SearchChanged)
-                }
-            }
-            (KeyCode::Char('c'), true) => Some(Message::Quit),
-            (KeyCode::Char('u'), true) => Some(Message::ClearInput),
-            (KeyCode::Char('n') | KeyCode::Char('j'), true) => Some(Message::SelectNext),
-            (KeyCode::Char('p') | KeyCode::Char('k'), true) => Some(Message::SelectPrev),
-            (KeyCode::Char('d'), true) => Some(Message::ScrollHalfDown),
-            (KeyCode::Char('b'), true) => Some(Message::ScrollHalfUp),
-            (KeyCode::Up, _) => Some(Message::SelectPrev),
-            (KeyCode::Down, _) => Some(Message::SelectNext),
-            (KeyCode::Enter, _) => {
-                if !self.results.is_empty() {
-                    if shift {
-                        Some(Message::ForkSession)
-                    } else {
-                        Some(Message::ResumeSession)
-                    }
-                } else {
-                    None
-                }
-            }
-            (KeyCode::Tab, _) => {
-                if !self.results.is_empty() {
-                    Some(Message::OpenDetail)
-                } else {
-                    None
-                }
-            }
-            (KeyCode::Char('/'), true) => Some(Message::ToggleHelp),
-            (KeyCode::Char('y'), false) => {
-                if self.input.value().is_empty() {
-                    Some(Message::CopySessionId)
-                } else {
-                    self.input.handle_event(&crossterm::event::Event::Key(key));
-                    Some(Message::SearchChanged)
-                }
-            }
-            (KeyCode::Char('r'), false) => {
-                if self.input.value().is_empty() {
-                    Some(Message::CopyResumeCmd)
-                } else {
-                    self.input.handle_event(&crossterm::event::Event::Key(key));
-                    Some(Message::SearchChanged)
-                }
-            }
-            _ => {
-                // Forward to input widget
-                self.input.handle_event(&crossterm::event::Event::Key(key));
-                Some(Message::SearchChanged)
-            }
+        // Esc: clear input if any, else quit (universal convention, not configurable)
+        if key.code == KeyCode::Esc {
+            return if self.input.value().is_empty() {
+                Some(Message::Quit)
+            } else {
+                Some(Message::ClearInput)
+            };
         }
+
+        if keys.quit.matches(&key) {
+            return Some(Message::Quit);
+        }
+        if keys.clear_input.matches(&key) {
+            return Some(Message::ClearInput);
+        }
+        if keys.select_next.matches(&key) {
+            return Some(Message::SelectNext);
+        }
+        if keys.select_prev.matches(&key) {
+            return Some(Message::SelectPrev);
+        }
+        if keys.scroll_half_down.matches(&key) {
+            return Some(Message::ScrollHalfDown);
+        }
+        if keys.scroll_half_up.matches(&key) {
+            return Some(Message::ScrollHalfUp);
+        }
+        if keys.resume_session.matches(&key) {
+            return if !self.results.is_empty() {
+                Some(Message::ResumeSession)
+            } else {
+                None
+            };
+        }
+        if keys.fork_session.matches(&key) {
+            return if !self.results.is_empty() {
+                Some(Message::ForkSession)
+            } else {
+                None
+            };
+        }
+        if keys.open_detail.matches(&key) {
+            return if !self.results.is_empty() {
+                Some(Message::OpenDetail)
+            } else {
+                None
+            };
+        }
+        if keys.toggle_help.matches(&key) {
+            return Some(Message::ToggleHelp);
+        }
+        if keys.copy_session_id.matches(&key) {
+            return Some(Message::CopySessionId);
+        }
+
+        // Forward everything else to input widget
+        self.input
+            .handle_event(&crossterm::event::Event::Key(key));
+        Some(Message::SearchChanged)
     }
 
     fn handle_detail_key(&self, key: KeyEvent) -> Option<Message> {
-        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        let keys = &self.keys.detail;
 
-        match (key.code, ctrl) {
-            (KeyCode::Esc | KeyCode::Char('q'), _) => Some(Message::Back),
-            (KeyCode::Char('c'), true) => Some(Message::Quit),
-            (KeyCode::Char('/'), false) => Some(Message::FocusSearch),
-            (KeyCode::Down | KeyCode::Char('j'), false) => Some(Message::DetailScrollDown),
-            (KeyCode::Up | KeyCode::Char('k'), false) => Some(Message::DetailScrollUp),
-            (KeyCode::Char('d'), true) => Some(Message::ScrollHalfDown),
-            (KeyCode::Char('b'), true) => Some(Message::ScrollHalfUp),
-            (KeyCode::Char('g'), false) => Some(Message::DetailTop),
-            (KeyCode::Char('G'), false) => Some(Message::DetailBottom),
-            (KeyCode::Char('n'), false) => Some(Message::NextMatch),
-            (KeyCode::Char('N'), false) => Some(Message::PrevMatch),
-            (KeyCode::Char('y'), false) => Some(Message::CopySessionId),
-            (KeyCode::Char('r'), false) => Some(Message::CopyResumeCmd),
-            (KeyCode::Char('/'), true) => Some(Message::ToggleHelp),
-            _ => None,
+        if keys.back.matches(&key) {
+            Some(Message::Back)
+        } else if keys.quit.matches(&key) {
+            Some(Message::Quit)
+        } else if keys.focus_search.matches(&key) {
+            Some(Message::FocusSearch)
+        } else if keys.scroll_down.matches(&key) {
+            Some(Message::DetailScrollDown)
+        } else if keys.scroll_up.matches(&key) {
+            Some(Message::DetailScrollUp)
+        } else if keys.scroll_half_down.matches(&key) {
+            Some(Message::ScrollHalfDown)
+        } else if keys.scroll_half_up.matches(&key) {
+            Some(Message::ScrollHalfUp)
+        } else if keys.top.matches(&key) {
+            Some(Message::DetailTop)
+        } else if keys.bottom.matches(&key) {
+            Some(Message::DetailBottom)
+        } else if keys.next_match.matches(&key) {
+            Some(Message::NextMatch)
+        } else if keys.prev_match.matches(&key) {
+            Some(Message::PrevMatch)
+        } else if keys.copy_session_id.matches(&key) {
+            Some(Message::CopySessionId)
+        } else if keys.toggle_help.matches(&key) {
+            Some(Message::ToggleHelp)
+        } else {
+            None
         }
     }
 
@@ -312,13 +330,15 @@ impl App {
             Message::SelectNext => {
                 if !self.results.is_empty() {
                     let i = self.selected_index();
-                    self.list_state
+                    self.table_state
                         .select(Some((i + 1).min(self.results.len() - 1)));
+                    self.load_preview();
                 }
             }
             Message::SelectPrev => {
                 let i = self.selected_index();
-                self.list_state.select(Some(i.saturating_sub(1)));
+                self.table_state.select(Some(i.saturating_sub(1)));
+                self.load_preview();
             }
             Message::ScrollHalfDown => {
                 if self.mode == Mode::Detail {
@@ -333,16 +353,18 @@ impl App {
                     } else {
                         self.results.len() - 1
                     };
-                    self.list_state
+                    self.table_state
                         .select(Some((self.selected_index() + half).min(max)));
+                    self.load_preview();
                 }
             }
             Message::ScrollHalfUp => {
                 if self.mode == Mode::Detail {
                     self.detail_scroll = self.detail_scroll.saturating_sub(10);
                 } else {
-                    self.list_state
+                    self.table_state
                         .select(Some(self.selected_index().saturating_sub(10)));
+                    self.load_preview();
                 }
             }
             Message::OpenDetail => {
@@ -362,13 +384,6 @@ impl App {
             Message::CopySessionId => {
                 if let Some(result) = self.results.get(self.selected_index()) {
                     self.status_message = format!("Session ID: {}", result.session_id);
-                }
-            }
-            Message::CopyResumeCmd => {
-                if let Some(result) = self.results.get(self.selected_index()) {
-                    let app = SourceApp::parse(&result.source).unwrap_or(SourceApp::ClaudeCode);
-                    let cmd = app.resume_cmd(&result.session_id);
-                    self.status_message = format!("Resume: {cmd}");
                 }
             }
             Message::DetailScrollDown => {
@@ -430,13 +445,15 @@ impl App {
         let filter = pinned_to_filter(&self.pinned);
         self.results = db::list_recent(&self.conn, 50, &filter).unwrap_or_default();
         self.status_message = format!("{} session(s)", self.results.len());
-        self.list_state.select(if self.results.is_empty() {
+        self.table_state.select(if self.results.is_empty() {
             None
         } else {
             Some(0)
         });
         self.last_query.clear();
         self.search_terms.clear();
+        self.invalidate_preview();
+        self.load_preview();
     }
 
     fn perform_search(&mut self) {
@@ -463,19 +480,21 @@ impl App {
                     self.search_terms.clear();
                     self.status_message = "1 result (ID match)".to_string();
                     self.results = vec![result];
-                    self.list_state.select(Some(0));
+                    self.table_state.select(Some(0));
                 }
                 Ok(None) => {
                     self.search_terms.clear();
                     self.status_message = "No session with that ID".to_string();
                     self.results.clear();
-                    self.list_state.select(None);
+                    self.table_state.select(None);
                 }
                 Err(_) => {
                     self.status_message = "Lookup error".to_string();
                 }
             }
             self.last_query = query_str;
+            self.invalidate_preview();
+            self.load_preview();
             return;
         }
 
@@ -493,7 +512,7 @@ impl App {
                     self.search_terms.clear();
                     self.status_message = format!("{} session(s)", rows.len());
                     self.results = rows;
-                    self.list_state.select(if self.results.is_empty() {
+                    self.table_state.select(if self.results.is_empty() {
                         None
                     } else {
                         Some(0)
@@ -504,6 +523,8 @@ impl App {
                 }
             }
             self.last_query = query_str;
+            self.invalidate_preview();
+            self.load_preview();
             return;
         }
 
@@ -520,7 +541,7 @@ impl App {
                 self.search_terms = search::query_terms(&parsed.text);
                 self.status_message = format!("{} result(s)", rows.len());
                 self.results = rows;
-                self.list_state.select(if self.results.is_empty() {
+                self.table_state.select(if self.results.is_empty() {
                     None
                 } else {
                     Some(0)
@@ -529,10 +550,54 @@ impl App {
             Err(_) => {
                 self.status_message = "Invalid query".to_string();
                 self.results.clear();
-                self.list_state.select(None);
+                self.table_state.select(None);
             }
         }
         self.last_query = query_str;
+        self.invalidate_preview();
+        self.load_preview();
+    }
+
+    fn invalidate_preview(&mut self) {
+        self.preview_session_id.clear();
+        self.preview_snippets.clear();
+        self.preview_scroll = 0;
+    }
+
+    /// Load preview snippets for the currently selected result.
+    fn load_preview(&mut self) {
+        let result = match self.results.get(self.selected_index()) {
+            Some(r) => r,
+            None => {
+                self.preview_snippets.clear();
+                self.preview_scroll = 0;
+                return;
+            }
+        };
+
+        // Skip if already loaded for this session
+        if result.session_id == self.preview_session_id {
+            return;
+        }
+        self.preview_session_id = result.session_id.clone();
+        self.preview_scroll = 0;
+
+        // Only load snippets from JSONL when we have search terms
+        if self.search_terms.is_empty() {
+            self.preview_snippets.clear();
+            return;
+        }
+
+        if let Some((app, path)) =
+            search::session_jsonl_path(&result.session_id, &result.slug, &result.source)
+        {
+            if let Ok(msgs) = indexer::extract_messages_for(&path, &app) {
+                let rd = display::prepare_result(result, &msgs, &self.search_terms, 0, 0);
+                self.preview_snippets = rd.snippets;
+                return;
+            }
+        }
+        self.preview_snippets.clear();
     }
 
     fn open_detail(&mut self) {

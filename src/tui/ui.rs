@@ -4,8 +4,8 @@ use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{
-    Block, Borders, Clear, List, ListItem, Paragraph, Scrollbar, ScrollbarOrientation,
-    ScrollbarState, Wrap,
+    Block, Borders, Cell, Clear, Paragraph, Row, Scrollbar, ScrollbarOrientation, ScrollbarState,
+    Table, Wrap,
 };
 use ratatui::Frame;
 
@@ -46,7 +46,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
                 Mode::Detail => draw_detail(f, app, chunks[1]),
                 _ => draw_results(f, app, chunks[1]),
             }
-            draw_help_overlay(f, f.area());
+            draw_help_overlay(f, app, f.area());
         }
     }
 
@@ -107,149 +107,309 @@ fn draw_results(f: &mut Frame, app: &mut App, area: Rect) {
         return;
     }
 
-    let selected = app.list_state.selected();
-    let items: Vec<ListItem> = app
-        .results
-        .iter()
-        .enumerate()
-        .map(|(i, result)| {
-            let is_selected = selected == Some(i);
-            result_list_item(result, is_selected, &app.search_terms)
-        })
-        .collect();
-
-    let list = List::new(items).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .title(format!(" Results ({}) ", app.results.len())),
-    );
-
-    f.render_stateful_widget(list, area, &mut app.list_state);
-
-    let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight);
-    let mut scrollbar_state = ScrollbarState::new(app.results.len().saturating_sub(1))
-        .position(app.selected_index());
-    f.render_stateful_widget(scrollbar, area, &mut scrollbar_state);
-}
-
-fn result_list_item<'a>(
-    result: &SearchResult,
-    is_selected: bool,
-    terms: &[String],
-) -> ListItem<'a> {
-    let branches: Vec<String> = serde_json::from_str(&result.git_branches).unwrap_or_default();
-
-    let has_title = result
-        .custom_title
-        .as_deref()
-        .is_some_and(|t| !t.is_empty());
-    let primary = if !result.cwd.is_empty() {
-        display::project_slug(&result.cwd).to_string()
+    // Split area: table on top, preview pane on bottom
+    let show_preview = area.height >= 16;
+    let chunks = if show_preview {
+        Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
+            .split(area)
     } else {
-        result.session_id.clone()
+        // Too short for preview — table takes full height
+        Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Percentage(100)])
+            .split(area)
     };
 
-    let mut meta_parts = Vec::new();
-    if !branches.is_empty() {
-        meta_parts.push(format!("@{}", branches.join(",")));
+    draw_table(f, app, chunks[0]);
+    if show_preview && chunks.len() > 1 {
+        draw_preview(f, app, chunks[1]);
     }
-    if result.start_time.len() >= 10 {
-        meta_parts.push(result.start_time[..10].to_string());
+}
+
+fn draw_table(f: &mut Frame, app: &mut App, area: Rect) {
+    let header = Row::new(vec![
+        Cell::from("Date"),
+        Cell::from("Project"),
+        Cell::from("Title"),
+        Cell::from("Msgs"),
+    ])
+    .style(
+        Style::default()
+            .fg(Color::DarkGray)
+            .add_modifier(Modifier::BOLD),
+    );
+
+    let hl_style = Style::default()
+        .fg(Color::Red)
+        .add_modifier(Modifier::BOLD);
+    let terms = &app.search_terms;
+
+    let rows: Vec<Row> = app
+        .results
+        .iter()
+        .map(|result| result_table_row(result, terms, hl_style))
+        .collect();
+
+    let widths = [
+        Constraint::Length(6),
+        Constraint::Length(15),
+        Constraint::Fill(1),
+        Constraint::Length(4),
+    ];
+
+    let table = Table::new(rows, widths)
+        .header(header)
+        .row_highlight_style(
+            Style::default()
+                .bg(Color::DarkGray)
+                .add_modifier(Modifier::BOLD),
+        )
+        .highlight_symbol("▸ ")
+        .column_spacing(1);
+
+    f.render_stateful_widget(table, area, &mut app.table_state);
+}
+
+fn result_table_row<'a>(result: &SearchResult, terms: &[String], hl_style: Style) -> Row<'a> {
+    let date = display::relative_date(&result.start_time);
+    let project = if !result.cwd.is_empty() {
+        display::project_slug(&result.cwd).to_string()
+    } else {
+        result.session_id[..8.min(result.session_id.len())].to_string()
+    };
+
+    let title = if let Some(ref t) = result.custom_title {
+        if !t.is_empty() {
+            t.clone()
+        } else {
+            first_line_preview(&result.summary, &result.first_message)
+        }
+    } else {
+        first_line_preview(&result.summary, &result.first_message)
+    };
+
+    let msgs = if result.message_count > 0 {
+        format!("{:>4}", result.message_count)
+    } else {
+        String::new()
+    };
+
+    let date_style = Style::default().fg(Color::DarkGray);
+    let project_style = Style::default()
+        .fg(Color::Magenta)
+        .add_modifier(Modifier::BOLD);
+    let title_style = Style::default().fg(Color::White);
+    let msgs_style = Style::default().fg(Color::DarkGray);
+
+    Row::new(vec![
+        Cell::from(Span::styled(date, date_style)),
+        Cell::from(Line::from(highlight_spans(&project, terms, project_style, hl_style))),
+        Cell::from(Line::from(highlight_spans(&title, terms, title_style, hl_style))),
+        Cell::from(Span::styled(msgs, msgs_style)),
+    ])
+}
+
+/// Extract a one-line preview from summary or first_message.
+fn first_line_preview(summary: &str, first_message: &str) -> String {
+    let src = if !summary.is_empty() {
+        summary
+    } else if !first_message.is_empty() {
+        first_message
+    } else {
+        return String::new();
+    };
+    let line = src.lines().next().unwrap_or("").trim();
+    let line = line.replace('\t', " ");
+    if line.len() > 120 {
+        format!("{}…", &line[..119])
+    } else {
+        line.to_string()
+    }
+}
+
+fn draw_preview(f: &mut Frame, app: &App, area: Rect) {
+    let result = match app.selected_result() {
+        Some(r) => r,
+        None => return,
+    };
+
+    // Build title bar
+    let project = if !result.cwd.is_empty() {
+        display::project_slug(&result.cwd)
+    } else {
+        &result.session_id
+    };
+
+    let title_text = if let Some(ref t) = result.custom_title {
+        if !t.is_empty() {
+            format!(" {project} \u{b7} {t} ")
+        } else {
+            format!(" {project} ")
+        }
+    } else {
+        format!(" {project} ")
+    };
+
+    // Right side: date · msgs · duration
+    let mut meta_parts = Vec::new();
+    let rel_date = display::relative_date(&result.start_time);
+    if !rel_date.is_empty() {
+        meta_parts.push(rel_date);
     }
     if result.message_count > 0 {
         meta_parts.push(format!("{} msgs", result.message_count));
+    }
+    let duration = display::format_duration(&result.start_time, &result.end_time);
+    if !duration.is_empty() {
+        meta_parts.push(duration);
+    }
+    let branches: Vec<String> =
+        serde_json::from_str(&result.git_branches).unwrap_or_default();
+    if !branches.is_empty() {
+        meta_parts.push(format!("@{}", branches.join(",")));
     }
 
     let meta_str = if meta_parts.is_empty() {
         String::new()
     } else {
-        format!("  {}", meta_parts.join("  "))
+        format!(" {} ", meta_parts.join(" \u{b7} "))
     };
 
-    // Line 2: first_message preview
-    let preview = if !result.first_message.is_empty() {
-        let fm = result.first_message.replace('\n', " ");
-        let fm = fm.trim();
-        if fm.len() > 120 {
-            format!("  {}...", &fm[..117])
-        } else {
-            format!("  {fm}")
-        }
-    } else if !result.summary.is_empty() {
-        let s = result.summary.replace('\n', " ");
-        let s = s.trim().to_string();
-        if s.len() > 120 {
-            format!("  {}...", &s[..117])
-        } else {
-            format!("  {s}")
-        }
-    } else {
-        String::new()
-    };
-
-    let select_style = if is_selected {
-        Style::default()
-            .bg(Color::DarkGray)
-            .add_modifier(Modifier::BOLD)
-    } else {
-        Style::default()
-    };
-
-    let header_style = if is_selected {
+    let title_line = Line::from(Span::styled(
+        title_text,
         Style::default()
             .fg(Color::Magenta)
-            .bg(Color::DarkGray)
-            .add_modifier(Modifier::BOLD)
-    } else {
-        Style::default()
-            .fg(Color::Magenta)
-            .add_modifier(Modifier::BOLD)
-    };
+            .add_modifier(Modifier::BOLD),
+    ));
 
-    let title_style = if is_selected {
-        Style::default()
-            .fg(Color::Cyan)
-            .bg(Color::DarkGray)
-    } else {
-        Style::default()
-            .fg(Color::Cyan)
-    };
+    let bottom_line =
+        Line::from(Span::styled(meta_str, Style::default().fg(Color::DarkGray))).right_aligned();
 
-    let meta_style = if is_selected {
-        Style::default().fg(Color::Gray).bg(Color::DarkGray)
-    } else {
-        Style::default().fg(Color::DarkGray)
-    };
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::DarkGray))
+        .title(title_line)
+        .title_bottom(bottom_line);
 
-    let preview_style = if is_selected {
-        Style::default().fg(Color::White).bg(Color::DarkGray)
-    } else {
-        Style::default().fg(Color::Gray)
-    };
+    let inner = block.inner(area);
 
-    let indicator = if is_selected { "> " } else { "  " };
+    // Build preview content
+    let lines = build_preview_lines(app, result, inner.width as usize);
 
-    let highlight_style = Style::default()
+    let paragraph = Paragraph::new(lines).wrap(Wrap { trim: false });
+    f.render_widget(block, area);
+    f.render_widget(paragraph, inner);
+}
+
+fn build_preview_lines<'a>(
+    app: &App,
+    result: &SearchResult,
+    _width: usize,
+) -> Vec<Line<'a>> {
+    let terms = &app.search_terms;
+    let hl_style = Style::default()
         .fg(Color::Red)
         .add_modifier(Modifier::BOLD);
 
-    let mut header_spans = vec![Span::styled(indicator, select_style)];
-    header_spans.extend(highlight_spans(&primary, terms, header_style, highlight_style));
-    header_spans.extend(highlight_spans(&meta_str, terms, meta_style, highlight_style));
-    if has_title {
-        let title_text = format!("  {}", result.custom_title.as_deref().unwrap());
-        header_spans.extend(highlight_spans(&title_text, terms, title_style, highlight_style));
+    // Search mode: show matched snippets with tree connectors
+    if !terms.is_empty() && !app.preview_snippets.is_empty() {
+        let mut lines = Vec::new();
+        let count = app.preview_snippets.len();
+
+        for (i, snippet) in app.preview_snippets.iter().enumerate() {
+            let connector = if i + 1 < count { "\u{251c}" } else { "\u{2514}" }; // ├ or └
+            let rc = role_color(&snippet.role);
+            let marker_span = Span::styled(
+                format!(" {connector} {} ", snippet.marker),
+                Style::default().fg(rc),
+            );
+            let idx_span = Span::styled(
+                format!("{:>3}  ", snippet.index + 1),
+                Style::default().fg(Color::DarkGray),
+            );
+
+            // First line of snippet
+            if let Some(first) = snippet.lines.first() {
+                let text_style = if snippet.is_match {
+                    Style::default().fg(Color::White)
+                } else {
+                    Style::default().fg(Color::Gray)
+                };
+                let mut spans = vec![marker_span, idx_span];
+                if snippet.is_match && !terms.is_empty() {
+                    spans.extend(highlight_spans(&first.text, terms, text_style, hl_style));
+                } else {
+                    spans.push(Span::styled(first.text.clone(), text_style));
+                }
+                lines.push(Line::from(spans));
+            }
+
+            // Continuation lines (indented under tree)
+            let indent = if i + 1 < count { " \u{2502}       " } else { "         " }; // │ or spaces
+            for line in snippet.lines.iter().skip(1) {
+                if line.is_gap {
+                    lines.push(Line::from(Span::styled(
+                        format!("{indent}{}", line.text),
+                        Style::default().fg(Color::DarkGray),
+                    )));
+                } else {
+                    let text_style = if snippet.is_match {
+                        Style::default().fg(Color::White)
+                    } else {
+                        Style::default().fg(Color::Gray)
+                    };
+                    let mut spans = vec![Span::raw(indent.to_string())];
+                    if snippet.is_match && !terms.is_empty() {
+                        spans.extend(highlight_spans(&line.text, terms, text_style, hl_style));
+                    } else {
+                        spans.push(Span::styled(line.text.clone(), text_style));
+                    }
+                    lines.push(Line::from(spans));
+                }
+            }
+        }
+        return lines;
     }
 
-    let mut lines = vec![Line::from(header_spans)];
+    // Browse mode: show first_message as a simple preview
+    let preview_text = if !result.first_message.is_empty() {
+        &result.first_message
+    } else if !result.summary.is_empty() {
+        &result.summary
+    } else {
+        return vec![Line::from(Span::styled(
+            "No preview available",
+            Style::default().fg(Color::DarkGray),
+        ))];
+    };
 
-    if !preview.is_empty() {
-        let mut preview_spans = vec![Span::raw("  ")];
-        preview_spans.extend(highlight_spans(&preview, terms, preview_style, highlight_style));
-        lines.push(Line::from(preview_spans));
+    let marker = Span::styled(
+        "\u{276f} ",
+        Style::default().fg(Color::Green),
+    );
+
+    let text_style = Style::default().fg(Color::Gray);
+    let text_lines: Vec<&str> = preview_text.lines().collect();
+    let mut lines = Vec::new();
+    for (i, text_line) in text_lines.iter().take(8).enumerate() {
+        let mut spans = Vec::new();
+        if i == 0 {
+            spans.push(marker.clone());
+        } else {
+            spans.push(Span::raw("  "));
+        }
+        spans.push(Span::styled(text_line.to_string(), text_style));
+        lines.push(Line::from(spans));
     }
-
-    ListItem::new(lines)
+    if text_lines.len() > 8 {
+        lines.push(Line::from(Span::styled(
+            format!("  \u{2026} +{} more lines", text_lines.len() - 8),
+            Style::default().fg(Color::DarkGray),
+        )));
+    }
+    lines
 }
 
 fn draw_detail(f: &mut Frame, app: &App, area: Rect) {
@@ -484,18 +644,28 @@ fn draw_status_bar(f: &mut Frame, app: &App, area: Rect) {
                     format!("{}/{}", app.selected_index() + 1, app.results.len())
                 }
             }
-            Mode::Detail => {
-                let pos_info = format!("scroll: {}", app.detail_scroll + 1);
-                pos_info
-            }
+            Mode::Detail => format!("scroll: {}", app.detail_scroll + 1),
             Mode::Help => "Help".to_string(),
         }
     };
 
+    let keys = &app.keys;
     let right = match app.mode {
-        Mode::Normal => "Enter:resume  S-Enter:fork  Tab:detail  C-/:help  Esc:quit",
-        Mode::Detail => "Esc:back  n/N:matches  j/k:scroll  C-/:help",
-        Mode::Help => "Esc:close",
+        Mode::Normal => format!(
+            "{}:resume  {}:fork  {}:detail  {}:help  Esc:quit",
+            keys.normal.resume_session.display(),
+            keys.normal.fork_session.display(),
+            keys.normal.open_detail.display(),
+            keys.normal.toggle_help.display(),
+        ),
+        Mode::Detail => format!(
+            "{}:back  {}:matches  {}:scroll  {}:help",
+            keys.detail.back.display(),
+            keys.detail.next_match.display(),
+            keys.detail.scroll_down.display(),
+            keys.detail.toggle_help.display(),
+        ),
+        Mode::Help => format!("{}:close", keys.help.close.display()),
     };
 
     let available = area.width as usize;
@@ -518,9 +688,67 @@ fn draw_status_bar(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(p, area);
 }
 
-fn draw_help_overlay(f: &mut Frame, area: Rect) {
+fn draw_help_overlay(f: &mut Frame, app: &App, area: Rect) {
+    let keys = &app.keys;
+
+    fn help_row(key: &str, desc: &str) -> Line<'static> {
+        Line::from(format!("  {key:<16}{desc}"))
+    }
+
+    let section_style = Style::default()
+        .fg(Color::Yellow)
+        .add_modifier(Modifier::BOLD);
+
+    let help_text = vec![
+        Line::from(Span::styled(
+            "Keyboard Shortcuts",
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::from(""),
+        Line::from(Span::styled("Results View", section_style)),
+        help_row(&keys.normal.resume_session.display(), "Resume session (--resume)"),
+        help_row(&keys.normal.fork_session.display(), "Fork session (--fork-session)"),
+        help_row(&keys.normal.open_detail.display(), "Open session detail"),
+        Line::from("  Esc             Quit (or clear input)"),
+        help_row(&keys.normal.select_prev.display(), "Previous result"),
+        help_row(&keys.normal.select_next.display(), "Next result"),
+        help_row(&keys.normal.clear_input.display(), "Clear search"),
+        help_row(
+            &format!(
+                "{}/{}",
+                keys.normal.scroll_half_down.display(),
+                keys.normal.scroll_half_up.display()
+            ),
+            "Half-page scroll",
+        ),
+        help_row(&keys.normal.copy_session_id.display(), "Show session ID"),
+        help_row(&keys.normal.toggle_help.display(), "Toggle this help"),
+        Line::from(""),
+        Line::from(Span::styled("Detail View", section_style)),
+        help_row(&keys.detail.back.display(), "Back to results"),
+        help_row(&keys.detail.scroll_down.display(), "Scroll down/up"),
+        help_row(
+            &format!("{}/{}", keys.detail.top.display(), keys.detail.bottom.display()),
+            "Top/bottom",
+        ),
+        help_row(
+            &format!("{}/{}", keys.detail.next_match.display(), keys.detail.prev_match.display()),
+            "Next/prev match",
+        ),
+        help_row(&keys.detail.focus_search.display(), "Focus search input"),
+        help_row(&keys.detail.copy_session_id.display(), "Show session ID"),
+        Line::from(""),
+        Line::from(Span::styled("Search Filters", section_style)),
+        Line::from("  app:codex       Filter by app (claude/cc, codex/cx)"),
+        Line::from("  p:gamma         Filter by project/cwd"),
+        Line::from("  f:*.rs          Filter by file path"),
+        Line::from("  b:main          Filter by git branch"),
+    ];
+
     let help_width = 60u16;
-    let help_height = 28u16;
+    let help_height = help_text.len() as u16 + 2; // +2 for border
     let x = area.width.saturating_sub(help_width) / 2;
     let y = area.height.saturating_sub(help_height) / 2;
     let overlay = Rect::new(
@@ -531,58 +759,6 @@ fn draw_help_overlay(f: &mut Frame, area: Rect) {
     );
 
     f.render_widget(Clear, overlay);
-
-    let help_text = vec![
-        Line::from(Span::styled(
-            "Keyboard Shortcuts",
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        )),
-        Line::from(""),
-        Line::from(Span::styled(
-            "Results View",
-            Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD),
-        )),
-        Line::from("  Enter         Resume session (--resume)"),
-        Line::from("  Shift-Enter   Fork session (--fork-session)"),
-        Line::from("  Tab           Open session detail"),
-        Line::from("  Esc           Quit (or clear input)"),
-        Line::from("  Up/Ctrl-P     Previous result"),
-        Line::from("  Down/Ctrl-N   Next result"),
-        Line::from("  Ctrl-U        Clear search"),
-        Line::from("  Ctrl-D/Ctrl-B Half-page scroll"),
-        Line::from("  y             Show session ID"),
-        Line::from("  r             Show resume command"),
-        Line::from("  Ctrl-/        Toggle this help"),
-        Line::from(""),
-        Line::from(Span::styled(
-            "Detail View",
-            Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD),
-        )),
-        Line::from("  Esc/q         Back to results"),
-        Line::from("  j/k           Scroll down/up"),
-        Line::from("  g/G           Top/bottom"),
-        Line::from("  n/N           Next/prev match"),
-        Line::from("  /             Focus search input"),
-        Line::from("  y             Show session ID"),
-        Line::from("  r             Show resume command"),
-        Line::from(""),
-        Line::from(Span::styled(
-            "Search Filters",
-            Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD),
-        )),
-        Line::from("  app:codex     Filter by app (claude/cc, codex/cx)"),
-        Line::from("  p:gamma       Filter by project/cwd"),
-        Line::from("  f:*.rs        Filter by file path"),
-        Line::from("  b:main        Filter by git branch"),
-    ];
 
     let paragraph = Paragraph::new(help_text).block(
         Block::default()

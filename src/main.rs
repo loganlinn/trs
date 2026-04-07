@@ -4,6 +4,7 @@ mod db;
 mod display;
 mod error;
 mod indexer;
+mod keys;
 mod output;
 mod search;
 mod session;

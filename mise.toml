@@ -10,7 +10,6 @@ shellcheck = "latest"
 shfmt = "latest"
 actionlint = "latest"
 ripgrep = "latest"
-communique = "latest"
 rust = "latest"
 
 [tasks.build]
@@ -150,11 +149,10 @@ mise run release:notes "v${version}" $dry_run_flag
 '''
 
 [tasks."release:notes"]
-description = "Generate release notes and create GitHub release"
+description = "Create/update GitHub release with notes from CHANGELOG.md"
 usage = '''
 arg "[tag]" help="Git tag (default: latest tag)"
-flag "--dry-run" help="Generate notes without publishing"
-flag "--no-changelog" help="Skip CHANGELOG.md update"
+flag "--dry-run" help="Print release body without publishing"
 '''
 run = '''
 #!/usr/bin/env bash
@@ -162,19 +160,27 @@ set -euo pipefail
 
 tag="${usage_tag:-$(git describe --tags --abbrev=0)}"
 dry_run="${usage_dry_run:-false}"
-no_changelog="${usage_no_changelog:-false}"
 
-flags=()
-[[ "$dry_run" == "true" ]] && flags+=(--dry-run)
-[[ "$no_changelog" != "true" ]] && flags+=(--changelog)
-flags+=(--github-release)
+# Extract [Unreleased] section from CHANGELOG.md
+body=$(awk '/^## \[Unreleased\]/{found=1; next} found && /^## \[/{exit} found' CHANGELOG.md)
+body=$(printf '%s' "$body" | sed '/./,$!d') # trim leading blank lines
 
-communique generate "${flags[@]}" "$tag"
+if [[ -z "$body" ]]; then
+  echo >&2 "warning: no unreleased notes in CHANGELOG.md"
+  body="Release ${tag}"
+fi
 
-if [[ "$dry_run" != "true" && -n "$(git status --porcelain CHANGELOG.md)" ]]; then
-  git add CHANGELOG.md
-  git commit -m "changelog: $tag"
-  git push origin HEAD
+if [[ "$dry_run" == "true" ]]; then
+  printf '%s\n' "$body"
+  exit 0
+fi
+
+if gh release view "$tag" &>/dev/null; then
+  gh release edit "$tag" --notes "$body"
+  echo "Updated release $tag"
+else
+  gh release create "$tag" --title "$tag" --notes "$body"
+  echo "Created release $tag"
 fi
 '''
 

@@ -17,7 +17,7 @@ use crossterm::{
 use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
 
-use crate::config;
+use crate::config::{self, Config};
 use crate::db;
 use app::App;
 use event::{Event, EventHandler};
@@ -99,9 +99,10 @@ pub fn run(initial_input: &str, pinned: PinnedFilters) -> Result<Option<ExitActi
         let _ = crate::indexer::run_index(&db_path, false, None);
     }
 
+    let config = Config::load();
     let conn = db::open_db(&db_path, true)?;
     let mut tui = Tui::new(true)?;
-    let mut app = App::new(conn, initial_input, pinned);
+    let mut app = App::new(conn, initial_input, pinned, config.keys);
     let events = EventHandler::new(Duration::from_millis(100));
 
     let result = run_loop(&mut tui, &mut app, &events);
@@ -166,7 +167,7 @@ mod tests {
     fn test_app() -> App {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         conn.execute_batch(crate::db::SCHEMA).unwrap();
-        App::new(conn, "", PinnedFilters::default())
+        App::new(conn, "", PinnedFilters::default(), Default::default())
     }
 
     fn make_result(id: &str) -> crate::session::SearchResult {
@@ -206,7 +207,7 @@ mod tests {
     fn test_enter_produces_resume_message() {
         let mut app = test_app();
         app.results.push(make_result("test-1"));
-        app.list_state.select(Some(0));
+        app.table_state.select(Some(0));
 
         let msg = app.handle_key(key(KeyCode::Enter));
         assert!(matches!(msg, Some(Message::ResumeSession)));
@@ -272,7 +273,7 @@ mod tests {
                 rank: 0.0,
             });
         }
-        app.list_state.select(Some(0));
+        app.table_state.select(Some(0));
         assert_eq!(app.selected_index(), 0);
 
         let msg = app.handle_key(key(KeyCode::Down));
@@ -350,7 +351,7 @@ mod tests {
                 rank: 0.0,
             });
         }
-        app.list_state.select(Some(0));
+        app.table_state.select(Some(0));
         app.status_message = "5 session(s)".into();
 
         let backend = ratatui::backend::TestBackend::new(80, 24);

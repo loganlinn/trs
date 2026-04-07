@@ -3,6 +3,8 @@
 //! All formatting decisions (truncation, snippeting, header hierarchy, marker
 //! choice) happen in `prepare_result()`. Renderers handle only styling.
 
+use chrono::Datelike;
+
 use crate::search;
 use crate::session::{Message, MessageRole, SearchResult};
 
@@ -111,6 +113,34 @@ pub fn short_date(ts: &str) -> &str {
         &ts[..10]
     } else {
         ""
+    }
+}
+
+/// Compact relative date for table display.
+///
+/// Returns: "today", "1d"–"6d", "1w"–"3w", "Mon D", or "YYYY-MM".
+pub fn relative_date(ts: &str) -> String {
+    let parse = |s: &str| chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S%.fZ").ok();
+    let dt = match parse(ts) {
+        Some(d) => d.date(),
+        None => return short_date(ts).to_string(),
+    };
+    let today = chrono::Local::now().date_naive();
+    let days = (today - dt).num_days();
+    if days < 0 {
+        return short_date(ts).to_string();
+    }
+    match days {
+        0 => "today".into(),
+        1..=6 => format!("{days}d"),
+        7..=27 => format!("{}w", days / 7),
+        _ => {
+            if dt.year() == today.year() {
+                dt.format("%b %-d").to_string()
+            } else {
+                dt.format("%Y-%m").to_string()
+            }
+        }
     }
 }
 

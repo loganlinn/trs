@@ -5,6 +5,14 @@
 ### Added
 
 - **UUID session lookup**: Paste a Claude session ID (UUID) into the TUI search box or `trs query <UUID>` to find a session by exact ID. Bypasses FTS and does a direct database lookup.
+- **Configurable key bindings**: Key bindings are now loaded from `$XDG_CONFIG_HOME/trs/config.toml` under `[keys.normal]`, `[keys.detail]`, and `[keys.help]` sections. Supports single (`"ctrl-y"`) or multi-key (`["down", "ctrl-n"]`) bindings. All defaults are built in — config file is optional.
+
+### Changed
+
+- **TUI table layout with preview pane**: Search results now render as an aligned columnar table (Date, Project, Title, Msgs) with a split preview pane below showing matched snippets or the opening message. Replaces the free-form two-line list items. Dates use compact relative format (`today`, `3d`, `2w`, `Mar 2`). Preview pane hides on short terminals (< 16 rows).
+- **TUI normal mode keybindings**: Bare alpha-key shortcuts (`r`, `y`, `q`) no longer intercept text input in the search box. Copy session ID moved to `Ctrl-Y`; quit via `Esc` or `Ctrl-C`. All characters now reach the input widget regardless of whether the search box is empty.
+- **Removed copy resume command**: The `r` / copy resume command shortcut has been removed. Use `Ctrl-Y` to show the session ID instead.
+- **Dynamic help overlay**: Help text and status bar hints are now generated from the active key binding config, staying in sync with user overrides.
 
 ## [0.4.2](https://github.com/loganlinn/trs/releases/tag/v0.4.2) - 2026-03-29
 

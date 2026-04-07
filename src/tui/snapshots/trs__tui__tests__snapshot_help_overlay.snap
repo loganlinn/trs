@@ -6,23 +6,23 @@ expression: buffer_view(terminal.backend().buffer())
 │         │Keyboard Shortcuts                                        │         │
 └─────────│                                                          │─────────┘
 ┌ Results │Results View                                              │─────────┐
-│Type to s│  Enter         Resume session (--resume)                 │         │
-│         │  Shift-Enter   Fork session (--fork-session)             │         │
-│         │  Tab           Open session detail                       │         │
-│         │  Esc           Quit (or clear input)                     │         │
-│         │  Up/Ctrl-P     Previous result                           │         │
-│         │  Down/Ctrl-N   Next result                               │         │
-│         │  Ctrl-U        Clear search                              │         │
-│         │  Ctrl-D/Ctrl-B Half-page scroll                          │         │
-│         │  y             Show session ID                           │         │
-│         │  r             Show resume command                       │         │
-│         │  Ctrl-/        Toggle this help                          │         │
+│Type to s│  Enter           Resume session (--resume)               │         │
+│         │  S-Enter         Fork session (--fork-session)           │         │
+│         │  Tab             Open session detail                     │         │
+│         │  Esc             Quit (or clear input)                   │         │
+│         │  Up/Ctrl-p/Ctrl-kPrevious result                         │         │
+│         │  Down/Ctrl-n/Ctrl-jNext result                           │         │
+│         │  Ctrl-u          Clear search                            │         │
+│         │  Ctrl-d/Ctrl-b   Half-page scroll                        │         │
+│         │  Ctrl-y          Show session ID                         │         │
+│         │  Ctrl-/          Toggle this help                        │         │
 │         │                                                          │         │
 │         │Detail View                                               │         │
-│         │  Esc/q         Back to results                           │         │
-│         │  j/k           Scroll down/up                            │         │
-│         │  g/G           Top/bottom                                │         │
-│         │  n/N           Next/prev match                           │         │
-│         │  /             Focus search input                        │         │
-└─────────│  y             Show session ID                           │─────────┘
-0 session(s)                                                           Esc:close
+│         │  Esc/q           Back to results                         │         │
+│         │  Down/j          Scroll down/up                          │         │
+│         │  g/G             Top/bottom                              │         │
+│         │  n/N             Next/prev match                         │         │
+│         │  /               Focus search input                      │         │
+│         │  y               Show session ID                         │         │
+└─────────│                                                          │─────────┘
+0 session(s)                                                  Esc/q/Ctrl-/:close
