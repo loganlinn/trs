@@ -237,11 +237,21 @@ impl App {
                 }
             }
             (KeyCode::Char('/'), true) => Some(Message::ToggleHelp),
-            (KeyCode::Char('y'), false) if self.input.value().is_empty() => {
-                Some(Message::CopySessionId)
+            (KeyCode::Char('y'), false) => {
+                if self.input.value().is_empty() {
+                    Some(Message::CopySessionId)
+                } else {
+                    self.input.handle_event(&crossterm::event::Event::Key(key));
+                    Some(Message::SearchChanged)
+                }
             }
-            (KeyCode::Char('r'), false) if self.input.value().is_empty() => {
-                Some(Message::CopyResumeCmd)
+            (KeyCode::Char('r'), false) => {
+                if self.input.value().is_empty() {
+                    Some(Message::CopyResumeCmd)
+                } else {
+                    self.input.handle_event(&crossterm::event::Event::Key(key));
+                    Some(Message::SearchChanged)
+                }
             }
             _ => {
                 // Forward to input widget
@@ -445,6 +455,29 @@ impl App {
         // Merge: inline filters override pinned filters
         let branch_pat = parsed.branch.as_deref().or(self.pinned.branch.as_deref());
         let project_pat = parsed.project.as_deref().or(self.pinned.project.as_deref());
+
+        // Direct session ID lookup when input is a UUID
+        if search::is_uuid(&parsed.text) {
+            match db::lookup_by_id(&self.conn, parsed.text.trim()) {
+                Ok(Some(result)) => {
+                    self.search_terms.clear();
+                    self.status_message = "1 result (ID match)".to_string();
+                    self.results = vec![result];
+                    self.list_state.select(Some(0));
+                }
+                Ok(None) => {
+                    self.search_terms.clear();
+                    self.status_message = "No session with that ID".to_string();
+                    self.results.clear();
+                    self.list_state.select(None);
+                }
+                Err(_) => {
+                    self.status_message = "Lookup error".to_string();
+                }
+            }
+            self.last_query = query_str;
+            return;
+        }
 
         // If only filters and no text, list recent with filters
         if parsed.text.is_empty() {

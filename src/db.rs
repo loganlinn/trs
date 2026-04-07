@@ -227,6 +227,43 @@ pub fn upsert_session(conn: &Connection, sess: &Session, mtime: f64) -> Result<(
     Ok(())
 }
 
+/// Map a database row from the `sessions` table to a `SearchResult`.
+fn row_to_search_result(row: &rusqlite::Row) -> rusqlite::Result<SearchResult> {
+    Ok(SearchResult {
+        session_id: row.get("session_id")?,
+        source: row.get::<_, String>("source").unwrap_or_default(),
+        cwd: row.get::<_, String>("cwd").unwrap_or_default(),
+        slug: row.get::<_, String>("slug").unwrap_or_default(),
+        git_branches: row.get::<_, String>("git_branches").unwrap_or_default(),
+        start_time: row.get::<_, String>("start_time").unwrap_or_default(),
+        end_time: row.get::<_, String>("end_time").unwrap_or_default(),
+        files_touched: row.get::<_, String>("files_touched").unwrap_or_default(),
+        tools_used: row.get::<_, String>("tools_used").unwrap_or_default(),
+        message_count: row.get::<_, i64>("message_count").unwrap_or_default(),
+        first_message: row.get::<_, String>("first_message").unwrap_or_default(),
+        summary: row.get::<_, String>("summary").unwrap_or_default(),
+        content_hash: row
+            .get::<_, Option<String>>("content_hash")
+            .unwrap_or_default(),
+        custom_title: row
+            .get::<_, Option<String>>("custom_title")
+            .unwrap_or_default(),
+        metadata: row.get::<_, Option<String>>("metadata").unwrap_or_default(),
+        rank: row.get::<_, f64>("rank").unwrap_or(0.0),
+    })
+}
+
+/// Look up a single session by exact session_id.
+pub fn lookup_by_id(conn: &Connection, session_id: &str) -> Result<Option<SearchResult>> {
+    let mut stmt = conn.prepare("SELECT * FROM sessions WHERE session_id = ?1")?;
+    let mut rows = stmt.query_map([session_id], row_to_search_result)?;
+    match rows.next() {
+        Some(Ok(r)) => Ok(Some(r)),
+        Some(Err(e)) => Err(e.into()),
+        None => Ok(None),
+    }
+}
+
 /// Execute an FTS5 search query with optional filters.
 pub fn search(
     conn: &Connection,
@@ -302,30 +339,7 @@ pub fn search(
 
     let mut stmt = conn.prepare(&sql)?;
     let mut results: Vec<SearchResult> = stmt
-        .query_map(param_refs.as_slice(), |row| {
-            Ok(SearchResult {
-                session_id: row.get("session_id")?,
-                source: row.get::<_, String>("source").unwrap_or_default(),
-                cwd: row.get::<_, String>("cwd").unwrap_or_default(),
-                slug: row.get::<_, String>("slug").unwrap_or_default(),
-                git_branches: row.get::<_, String>("git_branches").unwrap_or_default(),
-                start_time: row.get::<_, String>("start_time").unwrap_or_default(),
-                end_time: row.get::<_, String>("end_time").unwrap_or_default(),
-                files_touched: row.get::<_, String>("files_touched").unwrap_or_default(),
-                tools_used: row.get::<_, String>("tools_used").unwrap_or_default(),
-                message_count: row.get::<_, i64>("message_count").unwrap_or_default(),
-                first_message: row.get::<_, String>("first_message").unwrap_or_default(),
-                summary: row.get::<_, String>("summary").unwrap_or_default(),
-                content_hash: row
-                    .get::<_, Option<String>>("content_hash")
-                    .unwrap_or_default(),
-                custom_title: row
-                    .get::<_, Option<String>>("custom_title")
-                    .unwrap_or_default(),
-                metadata: row.get::<_, Option<String>>("metadata").unwrap_or_default(),
-                rank: row.get::<_, f64>("rank").unwrap_or_default(),
-            })
-        })?
+        .query_map(param_refs.as_slice(), row_to_search_result)?
         .collect::<Result<Vec<_>, _>>()?;
 
     // Apply two-tier offset: metadata matches sort above body-only matches
@@ -384,30 +398,7 @@ pub fn list_recent(
     let mut stmt = conn.prepare(&sql)?;
     let param_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
     let rows = stmt
-        .query_map(param_refs.as_slice(), |row| {
-            Ok(SearchResult {
-                session_id: row.get("session_id")?,
-                source: row.get::<_, String>("source").unwrap_or_default(),
-                cwd: row.get::<_, String>("cwd").unwrap_or_default(),
-                slug: row.get::<_, String>("slug").unwrap_or_default(),
-                git_branches: row.get::<_, String>("git_branches").unwrap_or_default(),
-                start_time: row.get::<_, String>("start_time").unwrap_or_default(),
-                end_time: row.get::<_, String>("end_time").unwrap_or_default(),
-                files_touched: row.get::<_, String>("files_touched").unwrap_or_default(),
-                tools_used: row.get::<_, String>("tools_used").unwrap_or_default(),
-                message_count: row.get::<_, i64>("message_count").unwrap_or_default(),
-                first_message: row.get::<_, String>("first_message").unwrap_or_default(),
-                summary: row.get::<_, String>("summary").unwrap_or_default(),
-                content_hash: row
-                    .get::<_, Option<String>>("content_hash")
-                    .unwrap_or_default(),
-                custom_title: row
-                    .get::<_, Option<String>>("custom_title")
-                    .unwrap_or_default(),
-                metadata: row.get::<_, Option<String>>("metadata").unwrap_or_default(),
-                rank: 0.0,
-            })
-        })?
+        .query_map(param_refs.as_slice(), row_to_search_result)?
         .collect::<Result<Vec<_>, _>>()?;
     Ok(rows)
 }
@@ -616,6 +607,27 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM sessions", [], |r| r.get(0))
             .unwrap();
         assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn test_lookup_by_id() {
+        let conn = test_db();
+        let sess = Session {
+            session_id: "01020304-0506-0708-090a-0b0c0d0e0f10".into(),
+            source: "claude-code".into(),
+            cwd: "/home/user/project".into(),
+            body: "some session content".into(),
+            first_message: "hello".into(),
+            ..Default::default()
+        };
+        upsert_session(&conn, &sess, 1.0).unwrap();
+
+        let result = lookup_by_id(&conn, "01020304-0506-0708-090a-0b0c0d0e0f10").unwrap();
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().session_id, "01020304-0506-0708-090a-0b0c0d0e0f10");
+
+        let result = lookup_by_id(&conn, "nonexistent-id").unwrap();
+        assert!(result.is_none());
     }
 
     #[test]

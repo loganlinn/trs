@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- **UUID session lookup**: Paste a Claude session ID (UUID) into the TUI search box or `trs query <UUID>` to find a session by exact ID. Bypasses FTS and does a direct database lookup.
+
 ## [0.4.2](https://github.com/loganlinn/trs/releases/tag/v0.4.2) - 2026-03-29
 
 ### Fixed

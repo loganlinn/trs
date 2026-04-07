@@ -1,12 +1,23 @@
 use anyhow::Result;
 use regex::Regex;
 use std::path::Path;
+use std::sync::LazyLock;
 
 use crate::config;
 use crate::db;
 use crate::indexer;
 use crate::output;
 use crate::session::{App, Message};
+
+static UUID_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
+        .expect("valid regex")
+});
+
+/// Check if a string looks like a UUID (8-4-4-4-12 hex digits with hyphens).
+pub fn is_uuid(s: &str) -> bool {
+    UUID_RE.is_match(s.trim())
+}
 
 /// Resolve a project filter value: if it looks like a path (starts with `.`,
 /// `/`, or `~`), canonicalize it to an absolute path. Plain names are
@@ -622,6 +633,21 @@ mod tests {
         let q = parse_query("d:>=7d search");
         assert!(q.date.is_some());
         assert_eq!(q.date.unwrap().op, DateOp::Gte);
+    }
+
+    #[test]
+    fn test_is_uuid() {
+        assert!(is_uuid("01020304-0506-0708-090a-0b0c0d0e0f10"));
+        assert!(is_uuid("ABCDEF01-2345-6789-abcd-ef0123456789"));
+        assert!(is_uuid("  01020304-0506-0708-090a-0b0c0d0e0f10  ")); // trimmed
+
+        assert!(!is_uuid(""));
+        assert!(!is_uuid("not-a-uuid"));
+        assert!(!is_uuid("01020304050607080090a0b0c0d0e0f10")); // no hyphens
+        assert!(!is_uuid("01020304-0506-0708-090a-0b0c0d0e0f1")); // too short
+        assert!(!is_uuid("01020304-0506-0708-090a-0b0c0d0e0f100")); // too long
+        assert!(!is_uuid("g1020304-0506-0708-090a-0b0c0d0e0f10")); // non-hex
+        assert!(!is_uuid("LaunchDarkly migration")); // normal search
     }
 
     #[test]

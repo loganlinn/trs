@@ -87,6 +87,36 @@ fn run(cli: Cli) -> Result<i32> {
                 indexer::run_index(&db_path, false, app_filter.as_ref())?;
             }
 
+            // Direct session ID lookup when query is a UUID
+            if search::is_uuid(&query_str) {
+                if !db_path.exists() {
+                    eprintln!("Index not found. Run `trs index` first.");
+                    return Ok(2);
+                }
+                let conn = db::open_db(&db_path, false)?;
+                return match db::lookup_by_id(&conn, query_str.trim())? {
+                    Some(result) => {
+                        let (ctx_before, ctx_after) = args.effective_context();
+                        let messages =
+                            search::session_jsonl_path(&result.session_id, &result.slug, &result.source)
+                                .and_then(|(app, path)| indexer::extract_messages_for(&path, &app).ok())
+                                .unwrap_or_default();
+                        let display =
+                            display::prepare_result(&result, &messages, &[], ctx_before, ctx_after);
+                        let groups = display::group_results(vec![display]);
+                        let mut writer = io::stdout();
+                        for group in &groups {
+                            output::print_group(&mut writer, group, &[], color)?;
+                        }
+                        Ok(0)
+                    }
+                    None => {
+                        eprintln!("No session found with ID: {}", query_str.trim());
+                        Ok(2)
+                    }
+                };
+            }
+
             let query = db::normalize_fts_query(&query_str);
             let (ctx_before, ctx_after) = args.effective_context();
             let source_str = app_filter.map(|a| a.source_str().to_string());
