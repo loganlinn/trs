@@ -10,7 +10,6 @@ shellcheck = "latest"
 shfmt = "latest"
 actionlint = "latest"
 ripgrep = "latest"
-rust = "latest"
 
 [tasks.build]
 run = "cargo build"
