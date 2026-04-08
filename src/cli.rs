@@ -126,6 +126,10 @@ pub enum Command {
 
     /// Show the ingest record schema
     Schema(SchemaArgs),
+
+    /// Update trs to the latest release
+    #[command(alias = "update")]
+    SelfUpdate,
 }
 
 #[derive(Parser, Debug)]

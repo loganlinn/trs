@@ -158,6 +158,10 @@ fn run(cli: Cli) -> Result<i32> {
             run_schema(args.as_json)?;
             Ok(0)
         }
+        Some(Command::SelfUpdate) => {
+            run_self_update()?;
+            Ok(0)
+        }
         None => {
             // No subcommand: launch TUI if interactive, otherwise show help
             if !cli.no_tui && is_terminal::is_terminal(io::stderr()) {
@@ -251,6 +255,29 @@ fn current_git_branch() -> Option<String> {
             let s = s.trim();
             if s.is_empty() || s == "HEAD" { None } else { Some(s.to_string()) }
         })
+}
+
+// --- Self-update ---
+
+fn run_self_update() -> Result<()> {
+    use axoupdater::{ReleaseSource, ReleaseSourceType};
+
+    let mut updater = axoupdater::AxoUpdater::new_for("trs");
+    updater.set_current_version(env!("CARGO_PKG_VERSION").parse()?)?;
+    updater.set_release_source(ReleaseSource {
+        release_type: ReleaseSourceType::GitHub,
+        owner: "loganlinn".to_string(),
+        name: "trs".to_string(),
+        app_name: "trs".to_string(),
+    });
+
+    if !updater.is_update_needed_sync()? {
+        eprintln!("Already up to date (v{})", env!("CARGO_PKG_VERSION"));
+        return Ok(());
+    }
+
+    updater.run_sync()?;
+    Ok(())
 }
 
 // --- Ingest ---

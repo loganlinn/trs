@@ -1,0 +1,15 @@
+[workspace]
+# Don't publish to crates.io (binary-only)
+publish = false
+# Create git tags on release
+git_tag_enable = true
+# Create GitHub releases (with changelog body)
+git_release_enable = true
+# Update CHANGELOG.md
+changelog_update = true
+# Check semver compatibility
+semver_check = false
+
+[changelog]
+# Protect breaking changes in the changelog
+protect_breaking_commits = true
