@@ -2,6 +2,64 @@
 
 ## [Unreleased]
 
+## [0.5.0](https://github.com/loganlinn/trs/compare/v0.1.0...v0.5.0) - 2026-04-08
+
+### Added
+
+- manual version bump for tui layout redesign (4792c88a65bd0a5b060b7231fc14c0abaf4de7ea)
+- support session ID search
+
+### Fixed
+
+- fix failing test
+- fix clippy findings
+- fix gha workflows
+
+### Other
+
+- remove rust from mise tools to use from system (gha runner)
+- lint fixes
+- setup release-plz, cargo-dist, axoupdater
+- revamp tui layout to be grid/table oriented, fix keybinds
+- align with ratatui community recipes
+- update install commands
+- update install commands
+- v0.4.2
+- v0.4.2
+- v0.4.1
+- v0.4.0
+- communique for release notes
+- v0.3.1
+- v0.4.0
+- mise run main
+- v0.3.1
+- v0.3.0
+- date filter, display extraction, CLI-TUI filter parity
+- debounce TUI search input (150ms)
+- split two-tier search into separate queries
+- build script for git describe in --version output
+- two-tier search ranking: metadata matches above body-only
+- help overlay preserves return mode across all screens
+- prefix matching, custom_title in FTS, weighted BM25 ranking
+- highlight search term matches in TUI results list
+- add custom_title support (from --name / /rename)
+- v0.2.0
+- codex support
+- v0.1.2
+- rework of release tasks
+- build release for apple silicon
+- mise run bump
+- show recent conversations on empty state
+- v0.1.1
+- use kbd entities
+- sync
+- release tasks
+- release workflow
+- README
+- sync
+- sync
+- Initial commit
+
 ### Added
 
 - **UUID session lookup**: Paste a Claude session ID (UUID) into the TUI search box or `trs query <UUID>` to find a session by exact ID. Bypasses FTS and does a direct database lookup.
