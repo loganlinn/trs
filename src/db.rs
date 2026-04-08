@@ -76,10 +76,7 @@ const MIGRATIONS: &[(i64, &[&str])] = &[
             "ALTER TABLE sessions ADD COLUMN metadata TEXT",
         ],
     ),
-    (
-        3,
-        &["ALTER TABLE sessions ADD COLUMN custom_title TEXT"],
-    ),
+    (3, &["ALTER TABLE sessions ADD COLUMN custom_title TEXT"]),
     (
         4,
         &[
@@ -624,7 +621,10 @@ mod tests {
 
         let result = lookup_by_id(&conn, "01020304-0506-0708-090a-0b0c0d0e0f10").unwrap();
         assert!(result.is_some());
-        assert_eq!(result.unwrap().session_id, "01020304-0506-0708-090a-0b0c0d0e0f10");
+        assert_eq!(
+            result.unwrap().session_id,
+            "01020304-0506-0708-090a-0b0c0d0e0f10"
+        );
 
         let result = lookup_by_id(&conn, "nonexistent-id").unwrap();
         assert!(result.is_none());
@@ -694,11 +694,29 @@ mod tests {
         upsert_session(&conn, &sess, 1.0).unwrap();
 
         // Should find with matching project filter
-        let results = search(&conn, "rust", &SearchFilter { project_pat: Some("myapp"), ..Default::default() }, 10).unwrap();
+        let results = search(
+            &conn,
+            "rust",
+            &SearchFilter {
+                project_pat: Some("myapp"),
+                ..Default::default()
+            },
+            10,
+        )
+        .unwrap();
         assert_eq!(results.len(), 1);
 
         // Should not find with non-matching project filter
-        let results = search(&conn, "rust", &SearchFilter { project_pat: Some("other"), ..Default::default() }, 10).unwrap();
+        let results = search(
+            &conn,
+            "rust",
+            &SearchFilter {
+                project_pat: Some("other"),
+                ..Default::default()
+            },
+            10,
+        )
+        .unwrap();
         assert_eq!(results.len(), 0);
     }
 
@@ -723,16 +741,43 @@ mod tests {
         upsert_session(&conn, &sess2, 1.0).unwrap();
 
         // Exact path: only the exact cwd match
-        let results = search(&conn, "gamma", &SearchFilter { project_pat: Some("/home/user/gamma"), ..Default::default() }, 10).unwrap();
+        let results = search(
+            &conn,
+            "gamma",
+            &SearchFilter {
+                project_pat: Some("/home/user/gamma"),
+                ..Default::default()
+            },
+            10,
+        )
+        .unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].session_id, "proj-exact-1");
 
         // Wildcard path: matches children too
-        let results = search(&conn, "gamma", &SearchFilter { project_pat: Some("/home/user/gamma*"), ..Default::default() }, 10).unwrap();
+        let results = search(
+            &conn,
+            "gamma",
+            &SearchFilter {
+                project_pat: Some("/home/user/gamma*"),
+                ..Default::default()
+            },
+            10,
+        )
+        .unwrap();
         assert_eq!(results.len(), 2);
 
         // Plain name: substring match (both contain "gamma")
-        let results = search(&conn, "gamma", &SearchFilter { project_pat: Some("gamma"), ..Default::default() }, 10).unwrap();
+        let results = search(
+            &conn,
+            "gamma",
+            &SearchFilter {
+                project_pat: Some("gamma"),
+                ..Default::default()
+            },
+            10,
+        )
+        .unwrap();
         assert_eq!(results.len(), 2);
     }
 
@@ -759,12 +804,30 @@ mod tests {
         assert_eq!(results.len(), 2);
 
         // Filter claude-code
-        let results = search(&conn, "feature", &SearchFilter { source: Some("claude-code"), ..Default::default() }, 10).unwrap();
+        let results = search(
+            &conn,
+            "feature",
+            &SearchFilter {
+                source: Some("claude-code"),
+                ..Default::default()
+            },
+            10,
+        )
+        .unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].source, "claude-code");
 
         // Filter codex
-        let results = search(&conn, "feature", &SearchFilter { source: Some("codex"), ..Default::default() }, 10).unwrap();
+        let results = search(
+            &conn,
+            "feature",
+            &SearchFilter {
+                source: Some("codex"),
+                ..Default::default()
+            },
+            10,
+        )
+        .unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].source, "codex");
     }

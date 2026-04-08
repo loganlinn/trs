@@ -430,7 +430,10 @@ mod tests {
         print_result_header(&mut buf, &result, false).unwrap();
         let s = String::from_utf8(buf).unwrap();
         assert!(s.starts_with("trs"), "should start with project slug: {s}");
-        assert!(s.contains("tui-search-perf"), "should contain custom title: {s}");
+        assert!(
+            s.contains("tui-search-perf"),
+            "should contain custom title: {s}"
+        );
         assert!(s.contains("@main"));
     }
 

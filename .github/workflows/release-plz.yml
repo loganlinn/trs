@@ -1,8 +1,10 @@
 name: release-plz
 
 on:
-  push:
+  workflow_run:
+    workflows: [ci]
     branches: [main]
+    types: [completed]
 
 permissions:
   pull-requests: write
@@ -10,6 +12,7 @@ permissions:
 
 jobs:
   release-plz:
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
     concurrency:
       group: release-plz-${{ github.ref }}

@@ -322,9 +322,7 @@ mod tests {
         let mut app = test_app();
         let backend = ratatui::backend::TestBackend::new(80, 24);
         let mut terminal = ratatui::Terminal::new(backend).unwrap();
-        terminal
-            .draw(|f| super::ui::draw(f, &mut app))
-            .unwrap();
+        terminal.draw(|f| super::ui::draw(f, &mut app)).unwrap();
         insta::assert_snapshot!(buffer_view(terminal.backend().buffer()));
     }
 
@@ -356,9 +354,7 @@ mod tests {
 
         let backend = ratatui::backend::TestBackend::new(80, 24);
         let mut terminal = ratatui::Terminal::new(backend).unwrap();
-        terminal
-            .draw(|f| super::ui::draw(f, &mut app))
-            .unwrap();
+        terminal.draw(|f| super::ui::draw(f, &mut app)).unwrap();
         insta::assert_snapshot!(buffer_view(terminal.backend().buffer()));
     }
 
@@ -370,9 +366,7 @@ mod tests {
 
         let backend = ratatui::backend::TestBackend::new(80, 24);
         let mut terminal = ratatui::Terminal::new(backend).unwrap();
-        terminal
-            .draw(|f| super::ui::draw(f, &mut app))
-            .unwrap();
+        terminal.draw(|f| super::ui::draw(f, &mut app)).unwrap();
         insta::assert_snapshot!(buffer_view(terminal.backend().buffer()));
     }
 }

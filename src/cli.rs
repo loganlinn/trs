@@ -18,7 +18,7 @@ fn long_version() -> &'static str {
 #[command(
     name = "trs",
     version = long_version(),
-    about = "Full-text search over chat transcripts",
+    about = concat!("Full-text search over chat transcripts. ", env!("CARGO_PKG_REPOSITORY")),
     long_about = "Full-text search over chat transcripts.\n\n\
         When called with no arguments in an interactive terminal, opens the TUI.\n\
         Use `trs query` (or `trs q`) to search from the command line.",

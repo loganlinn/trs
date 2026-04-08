@@ -128,7 +128,12 @@ pub struct App {
 }
 
 impl App {
-    pub fn new(conn: Connection, initial_input: &str, pinned: PinnedFilters, keys: KeyBindings) -> Self {
+    pub fn new(
+        conn: Connection,
+        initial_input: &str,
+        pinned: PinnedFilters,
+        keys: KeyBindings,
+    ) -> Self {
         let initial_filter = pinned_to_filter(&pinned);
         let results = db::list_recent(&conn, 50, &initial_filter).unwrap_or_default();
         let status_message = format!("{} session(s)", results.len());
@@ -262,8 +267,7 @@ impl App {
         }
 
         // Forward everything else to input widget
-        self.input
-            .handle_event(&crossterm::event::Event::Key(key));
+        self.input.handle_event(&crossterm::event::Event::Key(key));
         Some(Message::SearchChanged)
     }
 
@@ -319,8 +323,7 @@ impl App {
                 Mode::Normal => {}
             },
             Message::SearchChanged => {
-                self.search_deadline =
-                    Some(Instant::now() + std::time::Duration::from_millis(150));
+                self.search_deadline = Some(Instant::now() + std::time::Duration::from_millis(150));
             }
             Message::ClearInput => {
                 self.search_deadline = None;

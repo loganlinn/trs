@@ -255,7 +255,11 @@ pub fn message_matches(msg: &Message, terms: &[String]) -> bool {
 }
 
 /// Locate the JSONL file for a session, checking the appropriate app directories.
-pub fn session_jsonl_path(session_id: &str, slug: &str, source: &str) -> Option<(App, std::path::PathBuf)> {
+pub fn session_jsonl_path(
+    session_id: &str,
+    slug: &str,
+    source: &str,
+) -> Option<(App, std::path::PathBuf)> {
     let app = App::parse(source);
 
     // Try Claude Code paths
@@ -533,7 +537,11 @@ mod tests {
     fn test_parse_query_resolves_project_tilde() {
         let q = parse_query("project:~/.dotfiles");
         let home = directories::BaseDirs::new().unwrap();
-        let expected = home.home_dir().join(".dotfiles").to_string_lossy().to_string();
+        let expected = home
+            .home_dir()
+            .join(".dotfiles")
+            .to_string_lossy()
+            .to_string();
         assert_eq!(q.project.as_deref(), Some(expected.as_str()));
     }
 

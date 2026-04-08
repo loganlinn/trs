@@ -11,9 +11,9 @@ use crate::session::{Message, MessageRole, SearchResult};
 /// Role marker characters matching the TUI convention.
 pub fn role_marker(role: &MessageRole) -> &'static str {
     match role {
-        MessageRole::User => "\u{276f}",     // ❯
+        MessageRole::User => "\u{276f}",      // ❯
         MessageRole::Assistant => "\u{25cf}", // ●
-        MessageRole::Summary => "\u{25c6}",  // ◆
+        MessageRole::Summary => "\u{25c6}",   // ◆
         MessageRole::Teammate => "\u{25cf}",  // ●
     }
 }
@@ -152,8 +152,7 @@ pub fn prepare_result(
     context_before: usize,
     context_after: usize,
 ) -> ResultDisplay {
-    let branches: Vec<String> =
-        serde_json::from_str(&result.git_branches).unwrap_or_default();
+    let branches: Vec<String> = serde_json::from_str(&result.git_branches).unwrap_or_default();
     let project_name = if !result.cwd.is_empty() {
         project_slug(&result.cwd).to_string()
     } else {
@@ -311,7 +310,10 @@ fn build_match_lines(text: &str, terms: &[String]) -> Vec<SnippetLine> {
     }
 
     // Trailing indicator
-    if include.last().is_some_and(|&last| last < text_lines.len() - 1) {
+    if include
+        .last()
+        .is_some_and(|&last| last < text_lines.len() - 1)
+    {
         let remaining = text_lines.len() - include.last().unwrap() - 1;
         result.push(SnippetLine {
             text: format!("... (+{remaining} lines)"),
@@ -464,7 +466,10 @@ mod tests {
 
     #[test]
     fn test_build_match_lines_long_with_snippet() {
-        let text: String = (0..20).map(|i| format!("line {i}")).collect::<Vec<_>>().join("\n");
+        let text: String = (0..20)
+            .map(|i| format!("line {i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
         let lines = build_match_lines(&text, &["line 10".into()]);
         // Should include windowed lines, not all 20
         assert!(lines.len() < 20);

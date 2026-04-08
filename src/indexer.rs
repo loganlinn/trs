@@ -569,8 +569,7 @@ fn parse_codex_session(path: &Path) -> Result<Session> {
                 match role {
                     "user" => {
                         for block in content_arr {
-                            let btype =
-                                block.get("type").and_then(|v| v.as_str()).unwrap_or("");
+                            let btype = block.get("type").and_then(|v| v.as_str()).unwrap_or("");
                             if btype == "input_text" {
                                 let text = block
                                     .get("text")
@@ -594,8 +593,7 @@ fn parse_codex_session(path: &Path) -> Result<Session> {
                     "assistant" => {
                         message_count += 1;
                         for block in content_arr {
-                            let btype =
-                                block.get("type").and_then(|v| v.as_str()).unwrap_or("");
+                            let btype = block.get("type").and_then(|v| v.as_str()).unwrap_or("");
                             match btype {
                                 "output_text" => {
                                     if let Some(t) = block.get("text").and_then(|v| v.as_str()) {
@@ -605,10 +603,8 @@ fn parse_codex_session(path: &Path) -> Result<Session> {
                                     }
                                 }
                                 "function_call" => {
-                                    let name = block
-                                        .get("name")
-                                        .and_then(|v| v.as_str())
-                                        .unwrap_or("");
+                                    let name =
+                                        block.get("name").and_then(|v| v.as_str()).unwrap_or("");
                                     if !name.is_empty() {
                                         tools.insert(name.to_string());
                                     }
@@ -633,10 +629,8 @@ fn parse_codex_session(path: &Path) -> Result<Session> {
                                             if let Some(cmd) =
                                                 args.get("command").and_then(|v| v.as_array())
                                             {
-                                                let cmd_str: Vec<&str> = cmd
-                                                    .iter()
-                                                    .filter_map(|v| v.as_str())
-                                                    .collect();
+                                                let cmd_str: Vec<&str> =
+                                                    cmd.iter().filter_map(|v| v.as_str()).collect();
                                                 if !cmd_str.is_empty() {
                                                     body_parts.push(
                                                         truncate(&cmd_str.join(" "), 200)
@@ -774,10 +768,8 @@ pub fn extract_codex_messages(path: &Path) -> Result<Vec<Message>> {
                             }
                         }
                         "function_call" => {
-                            let name =
-                                block.get("name").and_then(|v| v.as_str()).unwrap_or("");
-                            if let Some(args_str) =
-                                block.get("arguments").and_then(|v| v.as_str())
+                            let name = block.get("name").and_then(|v| v.as_str()).unwrap_or("");
+                            if let Some(args_str) = block.get("arguments").and_then(|v| v.as_str())
                             {
                                 if let Ok(args) =
                                     serde_json::from_str::<serde_json::Value>(args_str)
@@ -1092,7 +1084,9 @@ mod tests {
         );
 
         let sess = parse_codex_session(&path).unwrap();
-        assert!(sess.files_touched.contains(&"/tmp/proj/main.rs".to_string()));
+        assert!(sess
+            .files_touched
+            .contains(&"/tmp/proj/main.rs".to_string()));
         assert!(sess.tools_used.contains(&"read_file".to_string()));
         assert!(sess.tools_used.contains(&"shell".to_string()));
         assert!(sess.body.contains("cargo build"));

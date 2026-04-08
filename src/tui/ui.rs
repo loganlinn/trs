@@ -141,9 +141,7 @@ fn draw_table(f: &mut Frame, app: &mut App, area: Rect) {
             .add_modifier(Modifier::BOLD),
     );
 
-    let hl_style = Style::default()
-        .fg(Color::Red)
-        .add_modifier(Modifier::BOLD);
+    let hl_style = Style::default().fg(Color::Red).add_modifier(Modifier::BOLD);
     let terms = &app.search_terms;
 
     let rows: Vec<Row> = app
@@ -205,8 +203,18 @@ fn result_table_row<'a>(result: &SearchResult, terms: &[String], hl_style: Style
 
     Row::new(vec![
         Cell::from(Span::styled(date, date_style)),
-        Cell::from(Line::from(highlight_spans(&project, terms, project_style, hl_style))),
-        Cell::from(Line::from(highlight_spans(&title, terms, title_style, hl_style))),
+        Cell::from(Line::from(highlight_spans(
+            &project,
+            terms,
+            project_style,
+            hl_style,
+        ))),
+        Cell::from(Line::from(highlight_spans(
+            &title,
+            terms,
+            title_style,
+            hl_style,
+        ))),
         Cell::from(Span::styled(msgs, msgs_style)),
     ])
 }
@@ -265,8 +273,7 @@ fn draw_preview(f: &mut Frame, app: &App, area: Rect) {
     if !duration.is_empty() {
         meta_parts.push(duration);
     }
-    let branches: Vec<String> =
-        serde_json::from_str(&result.git_branches).unwrap_or_default();
+    let branches: Vec<String> = serde_json::from_str(&result.git_branches).unwrap_or_default();
     if !branches.is_empty() {
         meta_parts.push(format!("@{}", branches.join(",")));
     }
@@ -303,15 +310,9 @@ fn draw_preview(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(paragraph, inner);
 }
 
-fn build_preview_lines<'a>(
-    app: &App,
-    result: &SearchResult,
-    _width: usize,
-) -> Vec<Line<'a>> {
+fn build_preview_lines<'a>(app: &App, result: &SearchResult, _width: usize) -> Vec<Line<'a>> {
     let terms = &app.search_terms;
-    let hl_style = Style::default()
-        .fg(Color::Red)
-        .add_modifier(Modifier::BOLD);
+    let hl_style = Style::default().fg(Color::Red).add_modifier(Modifier::BOLD);
 
     // Search mode: show matched snippets with tree connectors
     if !terms.is_empty() && !app.preview_snippets.is_empty() {
@@ -319,7 +320,11 @@ fn build_preview_lines<'a>(
         let count = app.preview_snippets.len();
 
         for (i, snippet) in app.preview_snippets.iter().enumerate() {
-            let connector = if i + 1 < count { "\u{251c}" } else { "\u{2514}" }; // ├ or └
+            let connector = if i + 1 < count {
+                "\u{251c}"
+            } else {
+                "\u{2514}"
+            }; // ├ or └
             let rc = role_color(&snippet.role);
             let marker_span = Span::styled(
                 format!(" {connector} {} ", snippet.marker),
@@ -347,7 +352,11 @@ fn build_preview_lines<'a>(
             }
 
             // Continuation lines (indented under tree)
-            let indent = if i + 1 < count { " \u{2502}       " } else { "         " }; // │ or spaces
+            let indent = if i + 1 < count {
+                " \u{2502}       "
+            } else {
+                "         "
+            }; // │ or spaces
             for line in snippet.lines.iter().skip(1) {
                 if line.is_gap {
                     lines.push(Line::from(Span::styled(
@@ -385,10 +394,7 @@ fn build_preview_lines<'a>(
         ))];
     };
 
-    let marker = Span::styled(
-        "\u{276f} ",
-        Style::default().fg(Color::Green),
-    );
+    let marker = Span::styled("\u{276f} ", Style::default().fg(Color::Green));
 
     let text_style = Style::default().fg(Color::Gray);
     let text_lines: Vec<&str> = preview_text.lines().collect();
@@ -461,14 +467,21 @@ fn draw_detail(f: &mut Frame, app: &App, area: Rect) {
         })
         .collect();
 
-    let title_line = Line::from(vec![
-        Span::styled(title, Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD)),
-    ]);
+    let title_line = Line::from(vec![Span::styled(
+        title,
+        Style::default()
+            .fg(Color::Magenta)
+            .add_modifier(Modifier::BOLD),
+    )]);
 
     let bottom_line = if match_info.is_empty() {
         Line::from("")
     } else {
-        Line::from(Span::styled(match_info, Style::default().fg(Color::DarkGray))).right_aligned()
+        Line::from(Span::styled(
+            match_info,
+            Style::default().fg(Color::DarkGray),
+        ))
+        .right_aligned()
     };
 
     let paragraph = Paragraph::new(lines)
@@ -506,9 +519,7 @@ fn message_to_lines<'a>(
 
     let num_style = Style::default().fg(Color::DarkGray);
     let marker_style = Style::default().fg(rc);
-    let label_style = Style::default()
-        .fg(rc)
-        .add_modifier(Modifier::BOLD);
+    let label_style = Style::default().fg(rc).add_modifier(Modifier::BOLD);
 
     let mut header_spans = vec![
         Span::styled(format!("{:>3} ", msg.index + 1), num_style),
@@ -519,9 +530,7 @@ fn message_to_lines<'a>(
     if is_match {
         header_spans.push(Span::styled(
             " \u{25c0}",
-            Style::default()
-                .fg(Color::Red)
-                .add_modifier(Modifier::BOLD),
+            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
         ));
     }
 
@@ -538,7 +547,9 @@ fn message_to_lines<'a>(
                 Span::raw(INDENT),
                 Span::styled(
                     text_line.to_string(),
-                    Style::default().fg(Color::Green).add_modifier(Modifier::DIM),
+                    Style::default()
+                        .fg(Color::Green)
+                        .add_modifier(Modifier::DIM),
                 ),
             ])
         } else if text_line.starts_with('[') && text_line.ends_with(']') {
@@ -552,11 +563,7 @@ fn message_to_lines<'a>(
         } else if is_match && !terms.is_empty() {
             highlight_line(text_line, terms)
         } else {
-            let body_color = if is_match {
-                Color::White
-            } else {
-                Color::Gray
-            };
+            let body_color = if is_match { Color::White } else { Color::Gray };
             Line::from(vec![
                 Span::raw(INDENT),
                 Span::styled(text_line.to_string(), Style::default().fg(body_color)),
@@ -607,10 +614,7 @@ fn highlight_spans<'a>(
     let mut last = 0;
     for m in pattern.find_iter(text) {
         if m.start() > last {
-            spans.push(Span::styled(
-                text[last..m.start()].to_string(),
-                base_style,
-            ));
+            spans.push(Span::styled(text[last..m.start()].to_string(), base_style));
         }
         spans.push(Span::styled(m.as_str().to_string(), hl_style));
         last = m.end();
@@ -623,9 +627,7 @@ fn highlight_spans<'a>(
 
 /// Highlight search terms in a single line of text (for detail view).
 fn highlight_line<'a>(text: &str, terms: &[String]) -> Line<'a> {
-    let hl_style = Style::default()
-        .fg(Color::Red)
-        .add_modifier(Modifier::BOLD);
+    let hl_style = Style::default().fg(Color::Red).add_modifier(Modifier::BOLD);
     let base_style = Style::default().fg(Color::White);
     let mut spans = vec![Span::raw(INDENT.to_string())];
     spans.extend(highlight_spans(text, terms, base_style, hl_style));
@@ -708,8 +710,14 @@ fn draw_help_overlay(f: &mut Frame, app: &App, area: Rect) {
         )),
         Line::from(""),
         Line::from(Span::styled("Results View", section_style)),
-        help_row(&keys.normal.resume_session.display(), "Resume session (--resume)"),
-        help_row(&keys.normal.fork_session.display(), "Fork session (--fork-session)"),
+        help_row(
+            &keys.normal.resume_session.display(),
+            "Resume session (--resume)",
+        ),
+        help_row(
+            &keys.normal.fork_session.display(),
+            "Fork session (--fork-session)",
+        ),
         help_row(&keys.normal.open_detail.display(), "Open session detail"),
         Line::from("  Esc             Quit (or clear input)"),
         help_row(&keys.normal.select_prev.display(), "Previous result"),
@@ -730,11 +738,19 @@ fn draw_help_overlay(f: &mut Frame, app: &App, area: Rect) {
         help_row(&keys.detail.back.display(), "Back to results"),
         help_row(&keys.detail.scroll_down.display(), "Scroll down/up"),
         help_row(
-            &format!("{}/{}", keys.detail.top.display(), keys.detail.bottom.display()),
+            &format!(
+                "{}/{}",
+                keys.detail.top.display(),
+                keys.detail.bottom.display()
+            ),
             "Top/bottom",
         ),
         help_row(
-            &format!("{}/{}", keys.detail.next_match.display(), keys.detail.prev_match.display()),
+            &format!(
+                "{}/{}",
+                keys.detail.next_match.display(),
+                keys.detail.prev_match.display()
+            ),
             "Next/prev match",
         ),
         help_row(&keys.detail.focus_search.display(), "Focus search input"),
@@ -785,7 +801,10 @@ mod tests {
     }
 
     fn span_texts<'a>(spans: &'a [Span<'a>]) -> Vec<(&'a str, Style)> {
-        spans.iter().map(|s| (s.content.as_ref(), s.style)).collect()
+        spans
+            .iter()
+            .map(|s| (s.content.as_ref(), s.style))
+            .collect()
     }
 
     #[test]
@@ -825,7 +844,13 @@ mod tests {
         let spans = highlight_spans("Hello HELLO hello", &terms(&["hello"]), BASE, HL);
         assert_eq!(
             span_texts(&spans),
-            vec![("Hello", HL), (" ", BASE), ("HELLO", HL), (" ", BASE), ("hello", HL)]
+            vec![
+                ("Hello", HL),
+                (" ", BASE),
+                ("HELLO", HL),
+                (" ", BASE),
+                ("hello", HL)
+            ]
         );
     }
 
@@ -834,7 +859,12 @@ mod tests {
         let spans = highlight_spans("the quick brown fox", &terms(&["quick", "fox"]), BASE, HL);
         assert_eq!(
             span_texts(&spans),
-            vec![("the ", BASE), ("quick", HL), (" brown ", BASE), ("fox", HL)]
+            vec![
+                ("the ", BASE),
+                ("quick", HL),
+                (" brown ", BASE),
+                ("fox", HL)
+            ]
         );
     }
 

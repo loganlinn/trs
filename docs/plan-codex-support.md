@@ -14,6 +14,7 @@ trs currently only indexes Claude Code sessions from `~/.claude/projects/`. Open
 ## Key observations from research
 
 ### Codex session format
+
 - **Location:** `~/.codex/sessions/YYYY/MM/DD/<name>.jsonl` (72 files found)
 - **Archived:** `~/.codex/archived_sessions/*.jsonl` (3 files)
 - **No project-based directory structure** — cwd is in the `session_meta` payload instead
@@ -26,19 +27,20 @@ trs currently only indexes Claude Code sessions from `~/.claude/projects/`. Open
 - **No slug/project concept** — flat date-based hierarchy
 
 ### Key differences from Claude Code format
-| | Claude Code | Codex |
-|---|---|---|
-| Location | `~/.claude/projects/{slug}/{id}.jsonl` | `~/.codex/sessions/YYYY/MM/DD/*.jsonl` |
-| Metadata | Top-level `cwd`, `gitBranch`, `timestamp` fields | Nested in `session_meta.payload` |
-| Message types | `type: "user"/"assistant"/"summary"` | `type: "response_item"` with `payload.role` |
-| Content | `message.content` (string or blocks) | `payload.content` (array of typed blocks) |
-| Text block type | `{type: "text", text: "..."}` | `{type: "output_text", text: "..."}` |
-| Tool use | `{type: "tool_use", name, input}` | `{type: "function_call", name, arguments}` |
-| Tool result | `{type: "tool_result"}` | `{type: "function_call_output", output}` |
-| User input | `{type: "input_text", text: "..."}` in content blocks or string | `{type: "input_text", input_text: "..."}` (note: field is `input_text` not `text`) |
-| Session ID | filename stem | `session_meta.payload.id` (UUID) |
-| Slug | parent directory name | none (derive from cwd) |
-| Resume | `claude --resume <id>` | `codex --resume <id>` |
+
+|                 | Claude Code                                                     | Codex                                                                              |
+| --------------- | --------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| Location        | `~/.claude/projects/{slug}/{id}.jsonl`                          | `~/.codex/sessions/YYYY/MM/DD/*.jsonl`                                             |
+| Metadata        | Top-level `cwd`, `gitBranch`, `timestamp` fields                | Nested in `session_meta.payload`                                                   |
+| Message types   | `type: "user"/"assistant"/"summary"`                            | `type: "response_item"` with `payload.role`                                        |
+| Content         | `message.content` (string or blocks)                            | `payload.content` (array of typed blocks)                                          |
+| Text block type | `{type: "text", text: "..."}`                                   | `{type: "output_text", text: "..."}`                                               |
+| Tool use        | `{type: "tool_use", name, input}`                               | `{type: "function_call", name, arguments}`                                         |
+| Tool result     | `{type: "tool_result"}`                                         | `{type: "function_call_output", output}`                                           |
+| User input      | `{type: "input_text", text: "..."}` in content blocks or string | `{type: "input_text", input_text: "..."}` (note: field is `input_text` not `text`) |
+| Session ID      | filename stem                                                   | `session_meta.payload.id` (UUID)                                                   |
+| Slug            | parent directory name                                           | none (derive from cwd)                                                             |
+| Resume          | `claude --resume <id>`                                          | `codex --resume <id>`                                                              |
 
 ## Design
 
@@ -54,6 +56,7 @@ pub enum App {
 ```
 
 Each variant knows:
+
 - Where to find sessions on disk (`sessions_dir()`)
 - How to parse its JSONL format (`parse_session()`, `extract_messages()`)
 - How to construct a resume command (`resume_cmd()`)
@@ -120,6 +123,7 @@ Each variant knows:
 Since you're not liking the current profiles direction, we'll remove the `Profiles` command and `config::FieldProfile`/`apply_profile`. The `ingest` command stays (for arbitrary NDJSON), but profiles are removed. This simplifies the codebase. Can re-add a better version later.
 
 ### What stays the same
+
 - DB schema (no migration needed, `source` column already exists)
 - Ingest command (still accepts NDJSON on stdin)
 - FTS5 search mechanics
@@ -127,19 +131,19 @@ Since you're not liking the current profiles direction, we'll remove the `Profil
 
 ## File change summary
 
-| File | Action |
-|---|---|
-| `src/session.rs` | Add `App` enum |
-| `src/config.rs` | Add Codex paths, remove profile types |
-| `src/indexer.rs` | Add `parse_codex_session`, `extract_codex_messages`, multi-app glob |
-| `src/cli.rs` | Add `--app`/`-a` flag, remove `Profiles` command |
-| `src/db.rs` | Add source filter to search/list_recent |
-| `src/search.rs` | Multi-app JSONL path resolution |
-| `src/output.rs` | App-aware resume command |
-| `src/main.rs` | Remove profiles command handler, wire `--app` through |
-| `src/tui/app.rs` | App-aware exit actions |
-| `tests/integration.rs` | Add Codex parsing tests |
-| `CHANGELOG.md` | Create with v0.2.0 entry |
+| File                   | Action                                                              |
+| ---------------------- | ------------------------------------------------------------------- |
+| `src/session.rs`       | Add `App` enum                                                      |
+| `src/config.rs`        | Add Codex paths, remove profile types                               |
+| `src/indexer.rs`       | Add `parse_codex_session`, `extract_codex_messages`, multi-app glob |
+| `src/cli.rs`           | Add `--app`/`-a` flag, remove `Profiles` command                    |
+| `src/db.rs`            | Add source filter to search/list_recent                             |
+| `src/search.rs`        | Multi-app JSONL path resolution                                     |
+| `src/output.rs`        | App-aware resume command                                            |
+| `src/main.rs`          | Remove profiles command handler, wire `--app` through               |
+| `src/tui/app.rs`       | App-aware exit actions                                              |
+| `tests/integration.rs` | Add Codex parsing tests                                             |
+| `CHANGELOG.md`         | Create with v0.2.0 entry                                            |
 
 ## Test plan
 

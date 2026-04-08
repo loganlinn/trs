@@ -273,13 +273,13 @@ Options:
 
 ## Environment Variables
 
-| Variable      | Description                                        | Default                          |
-|---------------|----------------------------------------------------|----------------------------------|
-| `TRS_DB`      | Path to the index database                         | `~/.local/share/trs/index.db`   |
-| `TRS_COLOR`   | Color mode: `auto`, `always`, `never`              | `auto`                           |
-| `NO_COLOR`    | Disable color output (any non-empty value)         | _(unset)_                        |
-| `XDG_DATA_HOME` | Base directory for index database                | `~/.local/share`                 |
-| `XDG_CONFIG_HOME` | Base directory for profiles config             | `~/.config`                      |
+| Variable          | Description                                | Default                       |
+| ----------------- | ------------------------------------------ | ----------------------------- |
+| `TRS_DB`          | Path to the index database                 | `~/.local/share/trs/index.db` |
+| `TRS_COLOR`       | Color mode: `auto`, `always`, `never`      | `auto`                        |
+| `NO_COLOR`        | Disable color output (any non-empty value) | _(unset)_                     |
+| `XDG_DATA_HOME`   | Base directory for index database          | `~/.local/share`              |
+| `XDG_CONFIG_HOME` | Base directory for profiles config         | `~/.config`                   |
 
 `NO_COLOR` (per https://no-color.org/) takes precedence over `TRS_COLOR`.
 `--color` flag takes precedence over both environment variables.
@@ -288,13 +288,13 @@ Options:
 
 ## Exit Codes
 
-| Code | Meaning                                            |
-|------|----------------------------------------------------|
-| 0    | Success                                            |
-| 1    | General error (bad arguments, runtime failure)     |
-| 2    | No results found (search only)                     |
-| 3    | Index not found (search without `--no-index`)      |
-| 130  | Interrupted (Ctrl-C / SIGINT)                      |
+| Code | Meaning                                        |
+| ---- | ---------------------------------------------- |
+| 0    | Success                                        |
+| 1    | General error (bad arguments, runtime failure) |
+| 2    | No results found (search only)                 |
+| 3    | Index not found (search without `--no-index`)  |
+| 130  | Interrupted (Ctrl-C / SIGINT)                  |
 
 Exit code 2 for "no results" enables scripting patterns like:
 
@@ -311,35 +311,35 @@ fi
 The TUI opens when `trs` is invoked with no arguments in an interactive
 terminal. It provides real-time search with a fuzzy-matching input.
 
-| Key | Action |
-|---|---|
-| <kbd>Enter</kbd> | Resume session (`claude --resume`) |
-| <kbd>Shift</kbd>+<kbd>Enter</kbd> | Fork session (`--fork-session`) |
-| <kbd>Tab</kbd> | Open selected session detail |
-| <kbd>Esc</kbd> / <kbd>q</kbd> | Quit / go back |
-| <kbd>↑</kbd> / <kbd>Ctrl</kbd>+<kbd>P</kbd> | Previous result |
-| <kbd>↓</kbd> / <kbd>Ctrl</kbd>+<kbd>N</kbd> | Next result |
-| <kbd>Ctrl</kbd>+<kbd>U</kbd> | Clear search input |
-| <kbd>Ctrl</kbd>+<kbd>D</kbd> | Scroll down half page |
-| <kbd>Ctrl</kbd>+<kbd>B</kbd> | Scroll up half page |
-| <kbd>/</kbd> | Focus search input (from detail) |
-| <kbd>y</kbd> | Show session ID |
-| <kbd>r</kbd> | Show resume command |
-| <kbd>?</kbd> | Show help overlay |
+| Key                                         | Action                             |
+| ------------------------------------------- | ---------------------------------- |
+| <kbd>Enter</kbd>                            | Resume session (`claude --resume`) |
+| <kbd>Shift</kbd>+<kbd>Enter</kbd>           | Fork session (`--fork-session`)    |
+| <kbd>Tab</kbd>                              | Open selected session detail       |
+| <kbd>Esc</kbd> / <kbd>q</kbd>               | Quit / go back                     |
+| <kbd>↑</kbd> / <kbd>Ctrl</kbd>+<kbd>P</kbd> | Previous result                    |
+| <kbd>↓</kbd> / <kbd>Ctrl</kbd>+<kbd>N</kbd> | Next result                        |
+| <kbd>Ctrl</kbd>+<kbd>U</kbd>                | Clear search input                 |
+| <kbd>Ctrl</kbd>+<kbd>D</kbd>                | Scroll down half page              |
+| <kbd>Ctrl</kbd>+<kbd>B</kbd>                | Scroll up half page                |
+| <kbd>/</kbd>                                | Focus search input (from detail)   |
+| <kbd>y</kbd>                                | Show session ID                    |
+| <kbd>r</kbd>                                | Show resume command                |
+| <kbd>?</kbd>                                | Show help overlay                  |
 
 ### Session Detail View
 
-| Key | Action |
-|---|---|
+| Key                           | Action               |
+| ----------------------------- | -------------------- |
 | <kbd>Esc</kbd> / <kbd>q</kbd> | Back to results list |
-| <kbd>j</kbd> / <kbd>↓</kbd> | Scroll down |
-| <kbd>k</kbd> / <kbd>↑</kbd> | Scroll up |
-| <kbd>g</kbd> | Jump to top |
-| <kbd>G</kbd> | Jump to bottom |
-| <kbd>n</kbd> | Next match |
-| <kbd>N</kbd> | Previous match |
-| <kbd>y</kbd> | Show session ID |
-| <kbd>r</kbd> | Show resume command |
+| <kbd>j</kbd> / <kbd>↓</kbd>   | Scroll down          |
+| <kbd>k</kbd> / <kbd>↑</kbd>   | Scroll up            |
+| <kbd>g</kbd>                  | Jump to top          |
+| <kbd>G</kbd>                  | Jump to bottom       |
+| <kbd>n</kbd>                  | Next match           |
+| <kbd>N</kbd>                  | Previous match       |
+| <kbd>y</kbd>                  | Show session ID      |
+| <kbd>r</kbd>                  | Show resume command  |
 
 ---
 

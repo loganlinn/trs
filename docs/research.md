@@ -6,40 +6,40 @@ Research for porting `trs` (transcript search) to Rust with ratatui-based TUI.
 
 ### Core Dependencies
 
-| Crate | Version | Purpose | Features/Notes |
-|-------|---------|---------|----------------|
-| `ratatui` | 0.30.0 | TUI framework | `crossterm` backend (default) |
-| `crossterm` | 0.29.0 | Terminal backend | Re-exported via `ratatui::crossterm` since ratatui 0.28+ |
-| `rusqlite` | 0.38.0 | SQLite bindings | Features: `bundled`, `fts5` |
-| `clap` | 4.6.0 | CLI arg parsing | Feature: `derive` |
-| `serde` | 1.0.228 | Serialization | Feature: `derive` |
-| `serde_json` | 1.0.149 | JSON parsing | For JSONL session files |
-| `toml` | 1.0.6 | TOML config | For config file parsing |
-| `directories` | 6.0.0 | XDG paths | `ProjectDirs` for config/data/cache |
-| `anyhow` | 1.0.102 | Error handling | Application-level errors |
-| `thiserror` | 2.0.18 | Error handling | Library-level typed errors |
-| `indicatif` | 0.18.4 | Progress bars | For indexing in non-TUI mode |
-| `is-terminal` | 0.4.17 | TTY detection | Decide TUI vs piped output |
-| `regex` | 1.12.3 | Regex support | Query pattern matching |
-| `sha2` | 0.10.9 | Content hashing | File change detection for indexing |
-| `chrono` | 0.4.44 | Date/time | Feature: `serde` |
+| Crate         | Version | Purpose          | Features/Notes                                           |
+| ------------- | ------- | ---------------- | -------------------------------------------------------- |
+| `ratatui`     | 0.30.0  | TUI framework    | `crossterm` backend (default)                            |
+| `crossterm`   | 0.29.0  | Terminal backend | Re-exported via `ratatui::crossterm` since ratatui 0.28+ |
+| `rusqlite`    | 0.38.0  | SQLite bindings  | Features: `bundled`, `fts5`                              |
+| `clap`        | 4.6.0   | CLI arg parsing  | Feature: `derive`                                        |
+| `serde`       | 1.0.228 | Serialization    | Feature: `derive`                                        |
+| `serde_json`  | 1.0.149 | JSON parsing     | For JSONL session files                                  |
+| `toml`        | 1.0.6   | TOML config      | For config file parsing                                  |
+| `directories` | 6.0.0   | XDG paths        | `ProjectDirs` for config/data/cache                      |
+| `anyhow`      | 1.0.102 | Error handling   | Application-level errors                                 |
+| `thiserror`   | 2.0.18  | Error handling   | Library-level typed errors                               |
+| `indicatif`   | 0.18.4  | Progress bars    | For indexing in non-TUI mode                             |
+| `is-terminal` | 0.4.17  | TTY detection    | Decide TUI vs piped output                               |
+| `regex`       | 1.12.3  | Regex support    | Query pattern matching                                   |
+| `sha2`        | 0.10.9  | Content hashing  | File change detection for indexing                       |
+| `chrono`      | 0.4.44  | Date/time        | Feature: `serde`                                         |
 
 ### TUI Input Widgets
 
-| Crate | Version | Notes |
-|-------|---------|-------|
-| `tui-input` | 0.15.0 | Lightweight single-line input; good for search bar |
-| `ratatui-textarea` | 0.8.0 | Multi-line text editor widget (successor to `tui-textarea`) |
+| Crate              | Version | Notes                                                       |
+| ------------------ | ------- | ----------------------------------------------------------- |
+| `tui-input`        | 0.15.0  | Lightweight single-line input; good for search bar          |
+| `ratatui-textarea` | 0.8.0   | Multi-line text editor widget (successor to `tui-textarea`) |
 
 **Recommendation:** Use `tui-input` for the search bar -- it's simpler and purpose-built for single-line input. `ratatui-textarea` is overkill for a search field.
 
 ### Optional / Consider
 
-| Crate | Version | Purpose |
-|-------|---------|---------|
-| `tokio` | 1.50.0 | Async runtime (if needed for async event loop) |
-| `color-eyre` | latest | Enhanced error reporting with colored backtraces |
-| `tui-scrollview` | latest | Scrollable content areas for result preview |
+| Crate            | Version | Purpose                                          |
+| ---------------- | ------- | ------------------------------------------------ |
+| `tokio`          | 1.50.0  | Async runtime (if needed for async event loop)   |
+| `color-eyre`     | latest  | Enhanced error reporting with colored backtraces |
+| `tui-scrollview` | latest  | Scrollable content areas for result preview      |
 
 **Note on async:** Many ratatui apps use synchronous event loops with `crossterm::event::poll()` for simplicity. Async (tokio) is useful when you need background tasks (e.g., live search while typing). For trs, a sync event loop with periodic polling is likely sufficient since searches hit a local SQLite FTS5 index and return quickly.
 
@@ -87,6 +87,7 @@ Event -> Message -> Update(state) -> View(state) -> render
 ```
 
 **Core loop:**
+
 ```rust
 loop {
     terminal.draw(|f| app.view(f))?;
@@ -198,6 +199,7 @@ fn main() -> Result<()> {
 **Architecture:** Multi-crate workspace separating async git operations (`asyncgit/`) from TUI (`src/`). Components are organized by feature (diff, commit, stash, etc.).
 
 **Key patterns:**
+
 - Async git operations run on background threads, results sent via channels
 - Component-based UI with a `Component` trait
 - Keybinding configuration loaded from files
@@ -210,6 +212,7 @@ fn main() -> Result<()> {
 ### 2. television (alexpasmantier/television)
 
 **Architecture:** Single-crate with well-organized modules:
+
 - `action.rs` / `event.rs` -- message types
 - `app.rs` -- main application logic
 - `draw.rs` / `render.rs` / `screen/` -- UI rendering
@@ -220,6 +223,7 @@ fn main() -> Result<()> {
 - `config/` -- TOML configuration
 
 **Key patterns:**
+
 - Channel abstraction for pluggable data sources
 - Separation of draw/render concerns
 - TOML-based configuration with themes
@@ -234,6 +238,7 @@ fn main() -> Result<()> {
 **Architecture:** Search-and-replace TUI with multi-pane layout.
 
 **Key patterns:**
+
 - Multiple search modes (plain, regex, case-sensitive, whole-word)
 - Four-pane layout: search input, replace input, results list, preview
 - Tab-based focus switching between panes

@@ -98,10 +98,13 @@ fn run(cli: Cli) -> Result<i32> {
                 return match db::lookup_by_id(&conn, query_str.trim())? {
                     Some(result) => {
                         let (ctx_before, ctx_after) = args.effective_context();
-                        let messages =
-                            search::session_jsonl_path(&result.session_id, &result.slug, &result.source)
-                                .and_then(|(app, path)| indexer::extract_messages_for(&path, &app).ok())
-                                .unwrap_or_default();
+                        let messages = search::session_jsonl_path(
+                            &result.session_id,
+                            &result.slug,
+                            &result.source,
+                        )
+                        .and_then(|(app, path)| indexer::extract_messages_for(&path, &app).ok())
+                        .unwrap_or_default();
                         let display =
                             display::prepare_result(&result, &messages, &[], ctx_before, ctx_after);
                         let groups = display::group_results(vec![display]);
@@ -121,7 +124,10 @@ fn run(cli: Cli) -> Result<i32> {
             let query = db::normalize_fts_query(&query_str);
             let (ctx_before, ctx_after) = args.effective_context();
             let source_str = app_filter.map(|a| a.source_str().to_string());
-            let project_pat = args.project_pat.as_deref().map(search::resolve_project_filter);
+            let project_pat = args
+                .project_pat
+                .as_deref()
+                .map(search::resolve_project_filter);
             let date_filter = args.date.as_deref().and_then(search::parse_date_filter);
             let filter = db::SearchFilter {
                 file_pat: args.file_pat.as_deref(),
@@ -131,13 +137,7 @@ fn run(cli: Cli) -> Result<i32> {
                 date: date_filter.as_ref(),
             };
             let found = search::run_search(
-                &query,
-                &db_path,
-                &filter,
-                args.limit,
-                ctx_before,
-                ctx_after,
-                color,
+                &query, &db_path, &filter, args.limit, ctx_before, ctx_after, color,
             )?;
             Ok(if found { 0 } else { 2 })
         }
@@ -175,8 +175,7 @@ fn run(cli: Cli) -> Result<i32> {
                     Some("") => current_git_branch(),
                     other => other.map(str::to_string),
                 };
-                let project = project.as_deref()
-                    .map(search::resolve_project_filter);
+                let project = project.as_deref().map(search::resolve_project_filter);
                 let pinned = PinnedFilters { branch, project };
                 if let Some(action) = tui::run("", pinned)? {
                     exec_exit_action(action);
@@ -253,7 +252,11 @@ fn current_git_branch() -> Option<String> {
         .and_then(|o| {
             let s = String::from_utf8(o.stdout).ok()?;
             let s = s.trim();
-            if s.is_empty() || s == "HEAD" { None } else { Some(s.to_string()) }
+            if s.is_empty() || s == "HEAD" {
+                None
+            } else {
+                Some(s.to_string())
+            }
         })
 }
 
@@ -474,4 +477,3 @@ fn build_json_schema() -> serde_json::Value {
         "additionalProperties": true
     })
 }
-
