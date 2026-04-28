@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+## [0.5.1](https://github.com/loganlinn/trs/releases/tag/v0.5.1) - 2026-04-30
+
+### Changed
+
+- **Resume via `exec` instead of suspend/resume**: Selecting a session now `exec`s `claude --resume <id>` (or `codex`) directly, replacing the `trs` process. Eliminates the input lag that occurred when re-entering the TUI after the child exited.
+
+### Added
+
+- **`-c` / `--continue` flag**: Restores the prior TUI session — search query, pinned filters, and last-selected session id are persisted to `$XDG_STATE_HOME/trs/last.json` before exec, and reloaded on `trs --continue`. Skips re-indexing so the database matches the version that produced the saved results.
+
 ## [0.5.0](https://github.com/loganlinn/trs/compare/v0.1.0...v0.5.0) - 2026-04-08
 
 ### Added
