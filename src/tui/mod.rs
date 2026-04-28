@@ -19,6 +19,7 @@ use ratatui::Terminal;
 
 use crate::config::{self, Config};
 use crate::db;
+use crate::state::{self, TuiState};
 use app::App;
 use event::{Event, EventHandler};
 
@@ -90,11 +91,17 @@ impl Drop for Tui {
 }
 
 /// Run the interactive TUI search interface.
-pub fn run(initial_input: &str, pinned: PinnedFilters) -> Result<Option<ExitAction>> {
+pub fn run(
+    initial_input: &str,
+    pinned: PinnedFilters,
+    skip_index: bool,
+    selected_session_id: Option<&str>,
+) -> Result<Option<ExitAction>> {
     let db_path = config::default_db_path();
 
-    // Auto-index before launching TUI
-    if db_path.exists() {
+    // Auto-index before launching TUI (skipped on --continue so the DB matches
+    // the version that produced the saved query results).
+    if !skip_index && db_path.exists() {
         // Incremental index (errors are non-fatal for TUI launch)
         let _ = crate::indexer::run_index(&db_path, false, None);
     }
@@ -103,13 +110,40 @@ pub fn run(initial_input: &str, pinned: PinnedFilters) -> Result<Option<ExitActi
     let conn = db::open_db(&db_path, true)?;
     let mut tui = Tui::new(true)?;
     let mut app = App::new(conn, initial_input, pinned, config.keys);
+    if let Some(sid) = selected_session_id {
+        if let Some(idx) = app.results.iter().position(|r| r.session_id == sid) {
+            app.table_state.select(Some(idx));
+        }
+    }
     let events = EventHandler::new(Duration::from_millis(100));
 
     let result = run_loop(&mut tui, &mut app, &events);
 
     drop(tui);
     result?;
-    Ok(app.exit_action.clone())
+
+    let action = app.exit_action.clone();
+    if let Some(ref a) = action {
+        // Persist state so a follow-up `trs --continue` can restore the search.
+        save_state(&app, a);
+    }
+    Ok(action)
+}
+
+fn save_state(app: &App, action: &ExitAction) {
+    let session_id = match action {
+        ExitAction::Resume { session_id, .. } | ExitAction::Fork { session_id, .. } => {
+            session_id.clone()
+        }
+    };
+    state::save(&TuiState {
+        version: 0, // overwritten by save()
+        input: app.input.value().to_string(),
+        pinned_branch: app.pinned.branch.clone(),
+        pinned_project: app.pinned.project.clone(),
+        selected_session_id: Some(session_id),
+        saved_at: String::new(),
+    });
 }
 
 fn run_loop(tui: &mut Tui, app: &mut App, events: &EventHandler) -> Result<()> {

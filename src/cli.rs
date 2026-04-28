@@ -60,6 +60,10 @@ pub struct Cli {
     #[arg(short = '.', num_args = 0)]
     pub dot: bool,
 
+    /// Restore the last TUI session (search query, filters, selection); skips re-indexing
+    #[arg(short = 'c', long = "continue")]
+    pub continue_session: bool,
+
     #[command(subcommand)]
     pub command: Option<Command>,
 }

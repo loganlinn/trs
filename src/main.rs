@@ -8,6 +8,7 @@ mod keys;
 mod output;
 mod search;
 mod session;
+mod state;
 mod tui;
 
 use std::io::{self, BufRead, Write};
@@ -71,7 +72,9 @@ fn run(cli: Cli) -> Result<i32> {
                 // No query text: launch TUI with filters pre-populated
                 if !cli.no_tui && is_terminal::is_terminal(io::stderr()) {
                     let initial = args.to_tui_input();
-                    if let Some(action) = tui::run(&initial, PinnedFilters::default())? {
+                    if let Some(action) =
+                        tui::run(&initial, PinnedFilters::default(), false, None)?
+                    {
                         exec_exit_action(action);
                     }
                     return Ok(0);
@@ -165,19 +168,36 @@ fn run(cli: Cli) -> Result<i32> {
         None => {
             // No subcommand: launch TUI if interactive, otherwise show help
             if !cli.no_tui && is_terminal::is_terminal(io::stderr()) {
-                let mut branch = cli.branch;
-                let mut project = cli.project;
-                if cli.dot {
-                    branch.get_or_insert_with(String::new);
-                    project.get_or_insert_with(|| ".".to_string());
-                }
-                let branch = match branch.as_deref() {
-                    Some("") => current_git_branch(),
-                    other => other.map(str::to_string),
+                let (initial, pinned, skip_index, selected) = if cli.continue_session {
+                    let s = state::load();
+                    let input = s.as_ref().map(|s| s.input.clone()).unwrap_or_default();
+                    let pinned = s
+                        .as_ref()
+                        .map(|s| PinnedFilters {
+                            branch: s.pinned_branch.clone(),
+                            project: s.pinned_project.clone(),
+                        })
+                        .unwrap_or_default();
+                    let selected = s.and_then(|s| s.selected_session_id);
+                    if input.is_empty() && pinned.is_empty() && selected.is_none() {
+                        eprintln!("No saved session to continue.");
+                    }
+                    (input, pinned, true, selected)
+                } else {
+                    let mut branch = cli.branch;
+                    let mut project = cli.project;
+                    if cli.dot {
+                        branch.get_or_insert_with(String::new);
+                        project.get_or_insert_with(|| ".".to_string());
+                    }
+                    let branch = match branch.as_deref() {
+                        Some("") => current_git_branch(),
+                        other => other.map(str::to_string),
+                    };
+                    let project = project.as_deref().map(search::resolve_project_filter);
+                    (String::new(), PinnedFilters { branch, project }, false, None)
                 };
-                let project = project.as_deref().map(search::resolve_project_filter);
-                let pinned = PinnedFilters { branch, project };
-                if let Some(action) = tui::run("", pinned)? {
+                if let Some(action) = tui::run(&initial, pinned, skip_index, selected.as_deref())? {
                     exec_exit_action(action);
                 }
                 return Ok(0);
