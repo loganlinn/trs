@@ -30,26 +30,19 @@ impl EventHandler {
         let (tx, rx) = mpsc::channel();
 
         thread::spawn(move || loop {
-            if event::poll(tick_rate).unwrap_or(false) {
+            let event = if event::poll(tick_rate).unwrap_or(false) {
                 match event::read() {
                     Ok(CrosstermEvent::Key(key)) if key.kind == KeyEventKind::Press => {
-                        if tx.send(Event::Key(key)).is_err() {
-                            break;
-                        }
+                        Event::Key(key)
                     }
-                    Ok(CrosstermEvent::Mouse(mouse)) => {
-                        if tx.send(Event::Mouse(mouse)).is_err() {
-                            break;
-                        }
-                    }
-                    Ok(CrosstermEvent::Resize(w, h)) => {
-                        if tx.send(Event::Resize(w, h)).is_err() {
-                            break;
-                        }
-                    }
-                    _ => {}
+                    Ok(CrosstermEvent::Mouse(mouse)) => Event::Mouse(mouse),
+                    Ok(CrosstermEvent::Resize(w, h)) => Event::Resize(w, h),
+                    _ => continue,
                 }
-            } else if tx.send(Event::Tick).is_err() {
+            } else {
+                Event::Tick
+            };
+            if tx.send(event).is_err() {
                 break;
             }
         });
