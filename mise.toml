@@ -20,7 +20,7 @@ run = "cargo build --release"
 [tasks."build:release:install"]
 description = "Build release binary and install to target directory"
 depends = ["build:release"]
-usage = 'flag "-t --target"'
+usage = 'flag "-t --target <target>"'
 run = """
 target=${usage_target:-$HOME/.local/bin}
 mkdir -p "$(dirname "$target")"
