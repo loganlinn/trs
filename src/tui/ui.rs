@@ -712,7 +712,7 @@ fn draw_help_overlay(f: &mut Frame, app: &App, area: Rect) {
         Line::from(Span::styled("Results View", section_style)),
         help_row(
             &keys.normal.resume_session.display(),
-            "Resume session (--resume)",
+            "Resume session",
         ),
         help_row(
             &keys.normal.fork_session.display(),

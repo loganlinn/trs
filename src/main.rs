@@ -209,7 +209,7 @@ fn run(cli: Cli) -> Result<i32> {
     }
 }
 
-/// Replace the current process with the appropriate `--resume` command.
+/// Replace the current process with the appropriate resume command.
 fn exec_exit_action(action: tui::ExitAction) -> ! {
     let (session_id, cwd, source, fork) = match action {
         tui::ExitAction::Resume {
@@ -253,7 +253,14 @@ fn exec_exit_action(action: tui::ExitAction) -> ! {
     let app = App::parse(&source).unwrap_or(App::ClaudeCode);
     let bin = app.bin_name();
     let mut cmd = process::Command::new(bin);
-    cmd.arg("--resume").arg(&session_id);
+    match app {
+        App::Codex => {
+            cmd.arg("resume").arg(&session_id);
+        }
+        _ => {
+            cmd.arg("--resume").arg(&session_id);
+        }
+    }
     if fork {
         cmd.arg("--fork-session");
     }

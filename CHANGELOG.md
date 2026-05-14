@@ -1,6 +1,10 @@
 # Changelog
 
-## [Unreleased]
+## [0.5.2](https://github.com/loganlinn/trs/releases/tag/v0.5.2) - 2026-05-13
+
+### Fixed
+
+- **Codex resume command**: Use `codex resume <id>` subcommand syntax instead of incorrect `codex --resume <id>` flag syntax.
 
 ## [0.5.1](https://github.com/loganlinn/trs/releases/tag/v0.5.1) - 2026-04-30
 

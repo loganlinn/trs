@@ -48,7 +48,7 @@ impl App {
     pub fn resume_cmd(&self, session_id: &str) -> String {
         match self {
             App::ClaudeCode => format!("claude --resume {session_id}"),
-            App::Codex => format!("codex --resume {session_id}"),
+            App::Codex => format!("codex resume {session_id}"),
         }
     }
 
@@ -365,7 +365,7 @@ mod tests {
             App::ClaudeCode.resume_cmd("abc-123"),
             "claude --resume abc-123"
         );
-        assert_eq!(App::Codex.resume_cmd("abc-123"), "codex --resume abc-123");
+        assert_eq!(App::Codex.resume_cmd("abc-123"), "codex resume abc-123");
     }
 
     #[test]

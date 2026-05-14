@@ -6,7 +6,7 @@ expression: buffer_view(terminal.backend().buffer())
 │         │Keyboard Shortcuts                                        │         │
 └─────────│                                                          │─────────┘
 ┌ Results │Results View                                              │─────────┐
-│Type to s│  Enter           Resume session (--resume)               │         │
+│Type to s│  Enter           Resume session                          │         │
 │         │  S-Enter         Fork session (--fork-session)           │         │
 │         │  Tab             Open session detail                     │         │
 │         │  Esc             Quit (or clear input)                   │         │
